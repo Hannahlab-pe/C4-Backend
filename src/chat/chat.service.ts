@@ -47,20 +47,26 @@ FORMATO DEL INFORME EJECUTIVO (usa exactamente esta estructura):
 - **Área vendible: [X] m²** | Departamentos: [N]
 - Estacionamientos requeridos: [N] ([N] en sótano)
 
+*La planta libre resulta de aplicar los retiros normativos de [distrito] (frontal [X]m, lateral [X]m, posterior [X]m) sobre el terreno de [área]m². Se permiten [N] pisos según zonificación [zona] — el factor limitante es [CUS/normativa de pisos]. Con departamentos de ~[X]m² promedio se alcanzan [N] unidades.*
+
 ### Predimensionamiento Estructural *(empírico, referencial)*
 - Vigas principales: [BxH] cm
 - Losa aligerada: h=[X] cm
 - Columnas cuadradas: [XxX] cm
 - Concreto f'c=210: [X] m³ | Acero fy=4200: [X] ton
 
+*Dimensiones obtenidas por reglas empíricas (peralte ≈ luz/12, columnas por carga acumulada). Para [N] pisos con luces de ~5m se estima [X]m³ de concreto y [X] ton de acero. Valores pre-ETABS, solo para presupuesto referencial.*
+
 ### Modelo Financiero
-- Inversión total: $[X] USD
-- Ingresos proyectados: $[X] USD
+- Inversión total: $[X] USD (terreno + construcción + proyectos + ventas + admin)
+- Ingresos proyectados: $[X] USD ([X] m² vendibles × $[precio]/m²)
 - **Utilidad neta: $[X] USD — Margen: [X]%**
 - **TIR: [X]% anual** | VAN (12%): $[X] USD
 - Punto de equilibrio: [N] departamentos | Payback: [N] meses
 
-> *El predimensionamiento es referencial. Los valores financieros usan precios de mercado [año].*`
+*El costo de construcción se estima en ~$[X]/m² construido para [distrito]. El precio de venta de $[X]/m² es el promedio de mercado actual en la zona. La TIR se calcula sobre el flujo mensual a [N] meses, descontando preventas al [X]% desde el mes [N]. El punto de equilibrio de [N] deptos cubre costos fijos y financiamiento.*
+
+> *Predimensionamiento referencial (pre-ETABS/SAFE). Financiero basado en promedios de mercado — validar con tasador y estudio de mercado local.*`
 
 // ─── Tool definitions ──────────────────────────────────────────────────────────
 
