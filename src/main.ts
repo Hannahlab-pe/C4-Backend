@@ -9,7 +9,13 @@ async function bootstrap() {
   app.use(express.json({ limit: '50mb' }))
   app.use(express.urlencoded({ limit: '50mb', extended: true }))
 
-  app.enableCors({ origin: 'http://localhost:5173', credentials: true })
+  const allowedOrigins = [
+    'http://localhost:5173',
+    'https://c4.up.railway.app',
+    process.env.FRONTEND_URL,
+  ].filter(Boolean)
+
+  app.enableCors({ origin: allowedOrigins, credentials: true })
   app.useGlobalPipes(new ValidationPipe({ whitelist: true }))
   app.setGlobalPrefix('api')
 
