@@ -1,0 +1,63 @@
+import { Injectable, Logger } from '@nestjs/common'
+import { ConfigService } from '@nestjs/config'
+import axios, { AxiosError } from 'axios'
+
+@Injectable()
+export class MotoresService {
+  private readonly logger = new Logger(MotoresService.name)
+  private readonly baseUrl: string
+
+  constructor(config: ConfigService) {
+    this.baseUrl = config.get<string>('PYTHON_API_URL', 'http://localhost:8000')
+  }
+
+  async analisisCompleto(payload: {
+    terreno: { area_total: number; frente?: number | null; fondo?: number | null }
+    normativa: {
+      distrito: string
+      pisos_max: number
+      retiro_frontal: number
+      retiro_lateral: number
+      retiro_posterior: number
+      cus: number
+      area_min_depto: number
+      estacionamientos: number
+    }
+    luz_tipica?: number
+    precio_terreno_usd?: number
+    precio_venta_usd_m2?: number
+  }): Promise<any> {
+    const { data } = await axios.post(
+      `${this.baseUrl}/analisis-completo`,
+      payload,
+      { timeout: 30_000 },
+    )
+    return data
+  }
+
+  async cabida(payload: Record<string, any>): Promise<any> {
+    const { data } = await axios.post(`${this.baseUrl}/cabida`, payload, { timeout: 10_000 })
+    return data
+  }
+
+  async estructural(payload: Record<string, any>): Promise<any> {
+    const { data } = await axios.post(`${this.baseUrl}/estructural`, payload, { timeout: 10_000 })
+    return data
+  }
+
+  async financiero(payload: Record<string, any>): Promise<any> {
+    const { data } = await axios.post(`${this.baseUrl}/financiero`, payload, { timeout: 10_000 })
+    return data
+  }
+
+  async healthCheck(): Promise<boolean> {
+    try {
+      await axios.get(`${this.baseUrl}/health`, { timeout: 3_000 })
+      return true
+    } catch (e: unknown) {
+      const msg = e instanceof AxiosError ? e.message : String(e)
+      this.logger.warn(`Python API no disponible en ${this.baseUrl}: ${msg}`)
+      return false
+    }
+  }
+}
