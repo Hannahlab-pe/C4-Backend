@@ -36,6 +36,7 @@ REGLAS IMPORTANTES:
 - Si faltan datos críticos, haz máximo 2 preguntas por turno. Sé directo.
 - Cuando tengas área + distrito, ejecuta el flujo completo sin pedir más datos opcionales.
 - Responde siempre en español, tono profesional y conciso.
+- Antes de responder preguntas técnicas específicas (procedimientos, precios, normativas internas, especificaciones), llama a buscar_en_base_de_conocimiento. Si encuentra resultados relevantes, úsalos como base de tu respuesta citando el documento.
 
 MANEJO DE IMÁGENES Y DOCUMENTOS:
 - Si el usuario adjunta una imagen de un edificio, fachada, plano o referencia arquitectónica, analízala como inspiración o referencia de tipología para su proyecto. Describe lo que observas: número aproximado de pisos, tipo de fachada, materiales, tipología (flat, dúplex, loft, etc.), estilo arquitectónico. Usa esa información como contexto para el análisis si el usuario lo solicita.
@@ -77,6 +78,24 @@ FORMATO DEL INFORME EJECUTIVO (usa exactamente esta estructura):
 // ─── Tool definitions ──────────────────────────────────────────────────────────
 
 const C4_TOOLS: LlmTool[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'buscar_en_base_de_conocimiento',
+      description:
+        'Busca en los documentos internos de la empresa: manuales técnicos, procedimientos de obra, cotizaciones, normativas específicas, estudios de suelo, fichas de materiales, etc. Usar cuando el usuario pregunta algo técnico específico que podría estar documentado internamente. No usar para preguntas generales de conversación.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Pregunta o tema específico a buscar. Sé preciso para obtener mejores resultados. Ejemplo: "precio acero corrugado", "procedimiento calzadura tipo Berlín", "resistencia concreto premezclado".',
+          },
+        },
+        required: ['query'],
+      },
+    },
+  },
   {
     type: 'function',
     function: {
@@ -233,30 +252,11 @@ export class ChatService {
     const contextoDocumentos = await this.documentos.getContextoParaLlm(dto.proyectoId)
     const imagenesProyecto = await this.documentos.getImagenesParaLlm(dto.proyectoId)
 
-    // Buscar en base de conocimiento corporativa (Betondecken PDFs)
-    let contextoKb = ''
-    try {
-      res.write(`event:status\ndata:${JSON.stringify({ step: 'Consultando base de conocimiento...', icon: 'search' })}\n\n`)
-      const kbResults = await this.kb.search(dto.mensaje, 5)
-      this.logger.log(`KB search "${dto.mensaje.slice(0, 50)}": ${kbResults.length} resultados, similitudes: ${kbResults.map(r => r.similarity).join(', ')}`)
-      if (kbResults.length > 0) {
-        const chunks = kbResults
-          .filter((r) => r.similarity > 0.1)
-          .map((r) => `[${r.documento_nombre}]\n${r.contenido}`)
-          .join('\n\n---\n\n')
-        if (chunks) {
-          contextoKb = `\n\n---\n## Base de Conocimiento Corporativa (documentos internos de la empresa)\nUSA ESTA INFORMACIÓN PRIMERO antes de responder. Si la pregunta está relacionada con estos documentos, responde basándote EXCLUSIVAMENTE en este contenido:\n\n${chunks}`
-        }
-      }
-    } catch (err: any) {
-      this.logger.warn(`KB search error: ${err?.message}`)
-    }
-
     // Construir el último mensaje del usuario — puede incluir archivo adjunto puntual
     const lastUserContent = await this.buildUserContent(dto)
 
-    // System prompt enriquecido con documentos del proyecto + KB corporativa
-    const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + contextoKb
+    // System prompt enriquecido con documentos del proyecto
+    const systemPrompt = SYSTEM_PROMPT + contextoDocumentos
 
     // Mensajes del historial previo
     const historialMsgs: LlmMessage[] = history.slice(0, -1).map((m) => ({
@@ -381,11 +381,35 @@ export class ChatService {
       return { error: `Argumentos inválidos para ${name}` }
     }
 
+    if (name === 'buscar_en_base_de_conocimiento') return this.toolBuscarKb(args.query, res)
     if (name === 'consultar_normativa') return this.toolConsultarNormativa(args.distrito, res)
     if (name === 'analisis_completo') return this.toolAnalisisCompleto(args, res, proyectoId)
     if (name === 'generar_pdf') return this.toolGenerarPdf(args, res, proyectoId)
 
     return { error: `Tool desconocida: ${name}` }
+  }
+
+  private async toolBuscarKb(query: string, res: Response): Promise<any> {
+    res.write(`event:status\ndata:${JSON.stringify({ step: 'Consultando base de conocimiento...', icon: 'search' })}\n\n`)
+    try {
+      const results = await this.kb.search(query, 5)
+      const relevantes = results.filter(r => r.similarity > 0.35)
+      this.logger.log(`KB tool "${query.slice(0, 50)}": ${results.length} resultados, ${relevantes.length} relevantes`)
+      if (relevantes.length === 0) {
+        return { encontrado: false, mensaje: 'No se encontró información relevante en los documentos internos para esta consulta.' }
+      }
+      return {
+        encontrado: true,
+        fuentes: relevantes.map(r => ({
+          documento: r.documento_nombre,
+          contenido: r.contenido,
+          relevancia: r.similarity,
+        })),
+      }
+    } catch (err: any) {
+      this.logger.warn(`KB tool error: ${err?.message}`)
+      return { error: `Error consultando base de conocimiento: ${err?.message}` }
+    }
   }
 
   private async toolConsultarNormativa(distrito: string, res: Response): Promise<any> {
