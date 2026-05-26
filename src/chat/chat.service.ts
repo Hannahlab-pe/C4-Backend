@@ -473,7 +473,22 @@ export class ChatService {
   private async toolGenerarPdf(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
     res.write(`event:status\ndata:${JSON.stringify({ step: 'Generando PDF...', icon: 'pdf' })}\n\n`)
 
-    const datos = this.analisisPorProyecto.get(proyectoId)
+    let datos = this.analisisPorProyecto.get(proyectoId)
+
+    // Si no está en memoria (reinicio del servidor), leer desde la BD
+    if (!datos) {
+      const fromDb = await this.analisisService.getByProyecto(proyectoId)
+      if (fromDb) {
+        datos = {
+          distrito: fromDb.distrito,
+          cabida: fromDb.cabida,
+          estructura: fromDb.estructura,
+          financiero: fromDb.financiero,
+        }
+        this.analisisPorProyecto.set(proyectoId, datos)
+      }
+    }
+
     if (!datos) {
       return { error: 'No hay análisis previo para este proyecto. Primero ejecuta el análisis de cabida.' }
     }
