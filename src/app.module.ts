@@ -13,6 +13,8 @@ import { SeedService } from './seed/seed.service'
 import { KnowledgeBaseModule } from './knowledge-base/knowledge-base.module'
 import { TareasFaseModule } from './tareas-fase/tareas-fase.module'
 import { AnalisisModule } from './analisis/analisis.module'
+import { ContratasFaseModule } from './contratas-fase/contratas-fase.module'
+import { EquiposFaseModule } from './equipos-fase/equipos-fase.module'
 
 import { Usuario } from './entities/usuario.entity'
 import { Proyecto } from './entities/proyecto.entity'
@@ -31,12 +33,14 @@ import { Documento } from './entities/documento.entity'
 import { KnowledgeBaseChunk } from './entities/knowledge-base-chunk.entity'
 import { AnalisisProyecto } from './entities/analisis-proyecto.entity'
 import { TareaFase } from './entities/tarea-fase.entity'
+import { ContrataFase } from './entities/contrata-fase.entity'
+import { EquipoFase } from './entities/equipo-fase.entity'
 
 const entities = [
   Usuario, Proyecto, ProyectoUsuario, Sesion, Mensaje,
   Terreno, Excavacion, Construccion, Acabados, Administracion,
   GanttFase, Normativa, NormativaEmbedding, Documento, KnowledgeBaseChunk,
-  AnalisisProyecto, TareaFase,
+  AnalisisProyecto, TareaFase, ContrataFase, EquipoFase,
 ]
 
 @Module({
@@ -67,6 +71,8 @@ const entities = [
     KnowledgeBaseModule,
     TareasFaseModule,
     AnalisisModule,
+    ContratasFaseModule,
+    EquiposFaseModule,
   ],
   controllers: [AppController],
   providers: [AppService, SeedService],
