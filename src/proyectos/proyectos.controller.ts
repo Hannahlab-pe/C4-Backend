@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common'
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, UseGuards } from '@nestjs/common'
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'
 import { CurrentUser } from '../decorators/current-user.decorator'
 import { ProyectosService } from './proyectos.service'
@@ -22,5 +22,11 @@ export class ProyectosController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.proyectos.findOne(id)
+  }
+
+  @Delete(':id')
+  @HttpCode(204)
+  delete(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.proyectos.delete(id, user.id)
   }
 }
