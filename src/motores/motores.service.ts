@@ -26,6 +26,10 @@ export class MotoresService {
     luz_tipica?: number
     precio_terreno_usd?: number
     precio_venta_usd_m2?: number
+    area_demolicion_m2?: number
+    porcentaje_capital_propio?: number
+    velocidad_ventas_mensual?: number
+    mezcla_tipologias?: Array<{ tipo: string; porcentaje: number; precio_usd_m2: number }>
   }): Promise<any> {
     const { data } = await axios.post(
       `${this.baseUrl}/analisis-completo`,

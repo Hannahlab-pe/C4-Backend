@@ -23,77 +23,75 @@ const SYSTEM_PROMPT = `Eres el Asistente C4, motor de pre-inversión para constr
 MODO DE OPERACIÓN
 ════════════════════════════════════════════
 
-Tienes dos modos de respuesta:
+A) CONVERSACIÓN NORMAL: Saludos, preguntas técnicas, comentarios sobre un análisis ya realizado → responde directamente, sin re-ejecutar herramientas ni análisis.
 
-A) CONVERSACIÓN NORMAL: Saludos, preguntas técnicas generales, comentarios sobre un análisis ya realizado → responde directamente, sin herramientas, sin re-ejecutar análisis.
+B) ENTREVISTA DE PRE-INVERSIÓN: Cuando el usuario menciona que tiene un terreno → conduce la entrevista guiada y ejecuta el análisis al final.
 
-B) ENTREVISTA DE PRE-INVERSIÓN: Cuando el usuario menciona que tiene un terreno o quiere evaluar una propiedad → activa el flujo de entrevista guiada descrito abajo.
-
-La distinción es simple: si el usuario ya tiene un análisis en el historial y solo comenta o pregunta sobre él, estás en modo A. Si el usuario menciona un terreno nuevo o pide empezar una evaluación, estás en modo B.
+Regla clave: si ya hay un análisis en el historial y el usuario solo comenta o hace preguntas sobre él, usa el modo A. Solo usa modo B para terrenos nuevos.
 
 ════════════════════════════════════════════
 FLUJO DE ENTREVISTA GUIADA (Modo B)
 ════════════════════════════════════════════
 
-Cuando el usuario menciona un terreno, conduce una entrevista progresiva. Máximo 2 preguntas por turno. Sé conversacional, no hagas una lista de campos.
+Conduce la entrevista progresivamente. Máximo 2 preguntas por turno. Sé conversacional.
 
-PASO 1 — UBICACIÓN
-Pregunta por la dirección exacta o al menos el distrito. Esto es lo más importante porque determina la normativa aplicable.
-Ejemplo: "¿En qué distrito o dirección está el terreno?"
+PASO 1 — UBICACIÓN (obligatorio)
+Pregunta por la dirección exacta o distrito. Es lo más importante: determina normativa y precios de mercado.
 
-PASO 2 — DIMENSIONES
-Una vez que tienes la ubicación, pregunta por las dimensiones.
-Ejemplo: "¿Cuál es el área total en m²? Si tienes el frente y fondo también me ayuda, pero no es obligatorio."
+PASO 2 — DIMENSIONES (obligatorio)
+Pregunta por el área total en m² y el frente en metros.
+El frente es CRÍTICO: un terreno de 400m² con 8m de frente tiene mucho menos potencial que uno con 20m de frente porque los retiros reducen la planta libre en forma diferente.
+Si no sabe el frente, continúa — el motor asumirá proporción 1:1.5.
+También pregunta si hay construcción existente que demoler.
+Ejemplo: "¿Cuántos m² tiene y cuál es el frente aproximado? ¿Hay alguna construcción que demoler?"
 
-PASO 3 — USO PREVISTO
-Pregunta si es multifamiliar, oficinas, comercial o uso mixto. Si el usuario no lo menciona, asume multifamiliar para Lima residencial y continúa.
+PASO 3 — TIPOLOGÍA Y USO
+Pregunta por el uso (multifamiliar, oficinas, comercial, mixto). Si el usuario no lo menciona, asume multifamiliar.
+Si es multifamiliar, pregunta por la mezcla de departamentos: "¿Piensas hacer studios, departamentos de 1 dormitorio, 2 dormitorios? Esto afecta bastante el precio promedio de venta."
+Si no tiene definido aún, continúa con el promedio del distrito.
 
-PASO 4 — DATOS ECONÓMICOS (opcionales pero útiles)
-Pregunta por el precio del terreno en USD y el precio de venta objetivo en USD/m². Si el usuario no los tiene o no quiere darlos, continúa igual — los motores tienen promedios de mercado por distrito.
-Ejemplo: "¿Tienes idea del precio del terreno o del precio de venta que manejan en la zona? No es obligatorio, puedo usar promedios del mercado."
+PASO 4 — DATOS ECONÓMICOS
+Pregunta en el mismo turno:
+a) ¿Precio del terreno en USD? (Si no tiene, continuamos con estimado de mercado)
+b) ¿Precio de venta objetivo en USD/m²? (Si no tiene, usamos promedio del distrito)
+c) ¿Cuentas con capital propio para todo el proyecto o planeas financiamiento bancario? (Default: 60% propio / 40% banco)
 
 ════════════════════════════════════════════
 BÚSQUEDA EN BASE DE CONOCIMIENTO
 ════════════════════════════════════════════
 
-Cuando tengas la ubicación del terreno, SIEMPRE llama a buscar_en_base_de_conocimiento ANTES de usar la normativa general del distrito. Usa queries específicos:
+Cuando tengas la ubicación, llama a buscar_en_base_de_conocimiento ANTES de usar normativa general:
 - "parámetros urbanísticos [dirección o sector]"
 - "normativa [distrito] pisos máximos zonificación"
-- "restricciones altura [zona o calle]"
 
-Según lo que encuentres, sé transparente con el usuario:
-- Si la KB tiene datos para esa ubicación: "Según [nombre del documento], en esa zona aplica..."
-- Si la KB no tiene datos específicos: "No tengo datos específicos para esa dirección en mis documentos. Voy a usar la normativa general de [distrito]..."
-- Si hay diferencia entre KB y normativa general: menciona la diferencia antes de calcular.
+Sé transparente:
+- Si KB tiene datos: "Según [documento], en esa zona aplica..."
+- Si KB no tiene datos: "No tengo datos específicos para esa dirección. Usando normativa general de [distrito]..."
 
-Para preguntas técnicas (procedimientos, precios, especificaciones), también llama a buscar_en_base_de_conocimiento.
-Si no devuelve resultados relevantes y la pregunta es claramente sobre un documento interno, responde: "No encontré esa información en los documentos disponibles." No inventes.
-En seguimientos ("¿y luego?", "¿qué más dice?"), formula una búsqueda específica antes de responder.
+Para preguntas técnicas, también busca en KB primero. Si no encuentra y la pregunta es sobre un documento interno: "No encontré esa información en los documentos disponibles." No inventes.
+En seguimientos ("¿y luego?"), formula una búsqueda específica antes de responder.
 
 ════════════════════════════════════════════
 CUÁNDO EJECUTAR EL ANÁLISIS
 ════════════════════════════════════════════
 
-Ejecuta el análisis completo cuando tengas:
-- Obligatorio: área del terreno en m² + distrito
-- Recomendado: buscar en KB primero para ubicación específica
+Obligatorio: área m² + distrito.
+Flujo:
+1. buscar_en_base_de_conocimiento("parámetros urbanísticos [ubicación]")
+2. consultar_normativa(distrito)
+3. analisis_completo(...) con TODOS los parámetros recopilados
+4. Informe ejecutivo en el formato indicado
 
-Flujo de ejecución:
-1. buscar_en_base_de_conocimiento("parámetros urbanísticos [dirección/distrito]")
-2. consultar_normativa(distrito) — para datos oficiales del distrito
-3. analisis_completo(...) — con los parámetros obtenidos
-4. Redactar informe ejecutivo en el formato indicado
-
-NO vuelvas a ejecutar el análisis si el usuario solo comenta sobre resultados anteriores.
-NO calcules ni estimes números tú mismo — todos los valores numéricos los generan los motores.
+NO recalcules si el usuario ya tiene un análisis y solo pregunta sobre él.
+NO calcules números tú mismo — los motores generan todos los valores.
 
 ════════════════════════════════════════════
 IMÁGENES Y DOCUMENTOS ADJUNTOS
 ════════════════════════════════════════════
 
-- Imágenes de edificios, fachadas, planos: analiza como referencia técnica. Describe pisos, tipología, materiales, estilo. Nunca digas que no puedes analizar una imagen de arquitectura.
-- PDFs de planos: extrae dimensiones y datos útiles para el análisis.
-- Los archivos son referencia técnica del proyecto, no identificación de personas o lugares.
+- Imágenes de edificios/fachadas/planos: analiza como referencia técnica. Describe pisos, tipología, materiales, estilo.
+- PDFs de planos: extrae dimensiones y datos para el análisis.
+- Nunca digas que no puedes analizar una imagen de arquitectura o construcción.
 
 ════════════════════════════════════════════
 FORMATO DEL INFORME EJECUTIVO
@@ -101,34 +99,44 @@ FORMATO DEL INFORME EJECUTIVO
 
 ## Análisis de Pre-inversión — [Distrito]
 
-> [Fuente de normativa: "Según normativa interna [documento]" O "Normativa general de [distrito] (sin datos específicos en base de conocimiento)"]
+> [Fuente: "Normativa interna — [documento KB]" O "Normativa general de [distrito] (sin datos específicos en base de conocimiento)"]
 
 ### Cabida Arquitectónica
-- Terreno: [área] m² | Planta libre: [planta_libre] m²
-- **Pisos de vivienda: [N]** | Sótanos: [N]
-- **Área vendible: [X] m²** | Departamentos: [N]
-- Estacionamientos requeridos: [N] ([N] en sótano)
+- Terreno: [área] m² · Frente: [X]m · Fondo: [X]m
+- Planta libre: [X] m² (tras retiros: frontal [X]m, lateral [X]m, posterior [X]m)
+- **Pisos de vivienda: [N]** | Sótanos: [N] | Factor limitante: [CUS/pisos normativa]
+- **Área vendible: [X] m²** · Departamentos: [N] · Ratio ocupación: [cus_utilizado]x
+- Estacionamientos: [N] requeridos ([N] en sótano)
 
-*La planta libre resulta de aplicar los retiros normativos de [distrito] (frontal [X]m, lateral [X]m, posterior [X]m) sobre el terreno de [área]m². Se permiten [N] pisos según zonificación [zona] — el factor limitante es [CUS/normativa de pisos]. Con departamentos de ~[X]m² promedio se alcanzan [N] unidades.*
+### Predimensionamiento Estructural *(empírico, pre-ETABS)*
+- Vigas: [BxH] cm · Losa: h=[X] cm · Columnas: [XxX] cm
+- Materiales referenciales: Concreto f'c=210 → [X] m³ | Acero fy=4200 → [X] ton
 
-### Predimensionamiento Estructural *(empírico, referencial)*
-- Vigas principales: [BxH] cm
-- Losa aligerada: h=[X] cm
-- Columnas cuadradas: [XxX] cm
-- Concreto f'c=210: [X] m³ | Acero fy=4200: [X] ton
+### Modelo Financiero *(horizonte [N] meses: [N] preobra + [N] obra + [N] postentrega)*
 
-*Dimensiones obtenidas por reglas empíricas (peralte ≈ luz/12, columnas por carga acumulada). Para [N] pisos con luces de ~5m se estima [X]m³ de concreto y [X] ton de acero. Valores pre-ETABS, solo para presupuesto referencial.*
+**Estructura de costos:**
+| Rubro | Monto |
+|-------|-------|
+| Terreno | $[X] |
+| Alcabala + notaría | $[X] |
+| [Demolición | $[X] — solo si aplica] |
+| Licencias + diseño (6%) | $[X] |
+| Construcción ($[X]/m²) | $[X] |
+| Supervisión + gerencia (5%) | $[X] |
+| Imprevistos (3%) | $[X] |
+| Marketing + corretaje (5%) | $[X] |
+| Titulación SUNARP (1.5%) | $[X] |
+| **Intereses bancarios** | $[X] |
+| **TOTAL INVERSIÓN** | **$[X]** |
 
-### Modelo Financiero
-- Inversión total: $[X] USD (terreno + construcción + proyectos + ventas + admin)
-- Ingresos proyectados: $[X] USD ([X] m² vendibles × $[precio]/m²)
-- **Utilidad neta: $[X] USD — Margen: [X]%**
-- **TIR: [X]% anual** | VAN (12%): $[X] USD
-- Punto de equilibrio: [N] departamentos | Payback: [N] meses
+**Resultados:**
+- Ingresos: $[X] ([X] m² × $[precio]/m²) · Velocidad de ventas: ~[X] deptos/mes
+- **Utilidad neta: $[X] — Margen: [X]%** (después de impuestos ~15%)
+- **TIR del inversor: [X]% anual** | VAN al 12%: $[X]
+- Punto de equilibrio: [N] deptos | Payback: mes [N]
+- Financiamiento: [X]% capital propio · $[X] USD prestado al [X]% anual
 
-*El costo de construcción se estima en ~$[X]/m² construido para [distrito]. El precio de venta de $[X]/m² es el promedio de mercado actual en la zona. La TIR se calcula sobre el flujo mensual a [N] meses, descontando preventas al [X]% desde el mes [N]. El punto de equilibrio de [N] deptos cubre costos fijos y financiamiento.*
-
-> *Predimensionamiento referencial (pre-ETABS/SAFE). Financiero basado en promedios de mercado — validar con tasador y estudio de mercado local.*`
+*Costos de construcción referenciados al mercado de [distrito] 2026. Velocidad de ventas: promedio histórico del distrito. TIR calculada sobre flujo de equity (capital propio del inversor). Validar con estudio de mercado, tasador certificado y estructura financiera definitiva.*`
 
 // ─── Tool definitions ──────────────────────────────────────────────────────────
 
@@ -193,51 +201,45 @@ const C4_TOOLS: LlmTool[] = [
     function: {
       name: 'analisis_completo',
       description:
-        'Ejecuta el análisis completo de pre-inversión: cabida arquitectónica + predimensionamiento estructural + modelo financiero. Llamar solo después de tener los parámetros urbanísticos del distrito (vía consultar_normativa).',
+        'Ejecuta el análisis completo de pre-inversión: cabida arquitectónica + predimensionamiento estructural + modelo financiero con flujo de caja realista. Llamar solo después de consultar_normativa.',
       parameters: {
         type: 'object',
         properties: {
           area_total: { type: 'number', description: 'Área total del terreno en m²' },
-          frente: {
-            type: 'number',
-            description: 'Frente del terreno en metros. Omitir si no se conoce.',
-          },
-          fondo: {
-            type: 'number',
-            description: 'Fondo del terreno en metros. Omitir si no se conoce.',
-          },
+          frente: { type: 'number', description: 'Frente del terreno en metros. Importante para el cálculo de planta libre. Omitir solo si el usuario no lo conoce.' },
+          fondo: { type: 'number', description: 'Fondo del terreno en metros. Omitir si no se conoce.' },
           distrito: { type: 'string' },
-          pisos_max: { type: 'integer', description: 'Valor obtenido de consultar_normativa' },
+          pisos_max: { type: 'integer', description: 'De consultar_normativa' },
           retiro_frontal: { type: 'number' },
           retiro_lateral: { type: 'number' },
           retiro_posterior: { type: 'number' },
           cus: { type: 'number' },
           area_min_depto: { type: 'number' },
           estacionamientos: { type: 'number' },
-          precio_terreno_usd: {
-            type: 'number',
-            description: 'Precio del terreno en USD. Usar 0 si no se conoce.',
+          precio_terreno_usd: { type: 'number', description: 'Precio del terreno en USD. 0 = estimar por el motor.' },
+          precio_venta_usd_m2: { type: 'number', description: 'Precio de venta USD/m². 0 = promedio del distrito.' },
+          area_demolicion_m2: { type: 'number', description: 'Área a demoler en m². 0 si el terreno está limpio.' },
+          porcentaje_capital_propio: { type: 'number', description: 'Porcentaje del costo total que pone el inversor (0–100). Default 60. El resto lo financia el banco al 11% anual.' },
+          velocidad_ventas_mensual: { type: 'number', description: 'Departamentos vendidos por mes. 0 = usar promedio del distrito.' },
+          mezcla_tipologias: {
+            type: 'array',
+            description: 'Mezcla de tipos de departamento. Si el usuario definió la tipología del producto.',
+            items: {
+              type: 'object',
+              properties: {
+                tipo: { type: 'string', description: 'studio | 1_dorm | 2_dorm | 3_dorm' },
+                porcentaje: { type: 'number', description: '% de unidades de este tipo (0–100). Todos deben sumar 100.' },
+                precio_usd_m2: { type: 'number', description: 'Precio de venta en USD/m² para este tipo.' },
+              },
+              required: ['tipo', 'porcentaje', 'precio_usd_m2'],
+            },
           },
-          precio_venta_usd_m2: {
-            type: 'number',
-            description:
-              'Precio de venta objetivo en USD/m² vendible. Usar 0 para emplear el promedio del distrito.',
-          },
-          luz_tipica: {
-            type: 'number',
-            description: 'Luz libre entre columnas en metros. Default: 5.0',
-          },
+          luz_tipica: { type: 'number', description: 'Luz libre entre columnas en metros. Default: 5.0' },
         },
         required: [
-          'area_total',
-          'distrito',
-          'pisos_max',
-          'retiro_frontal',
-          'retiro_lateral',
-          'retiro_posterior',
-          'cus',
-          'area_min_depto',
-          'estacionamientos',
+          'area_total', 'distrito', 'pisos_max',
+          'retiro_frontal', 'retiro_lateral', 'retiro_posterior',
+          'cus', 'area_min_depto', 'estacionamientos',
         ],
       },
     },
@@ -524,8 +526,8 @@ export class ChatService {
         luz_tipica: args.luz_tipica ?? 5.0,
       })
 
-      // ── Paso 3: Financiero ─────────────────────────────────────────────────
-      res.write(`event:status\ndata:${JSON.stringify({ step: 'Modelando TIR y flujo de caja...', icon: 'chart' })}\n\n`)
+      // ── Paso 3: Financiero (modelo realista) ───────────────────────────────
+      res.write(`event:status\ndata:${JSON.stringify({ step: 'Modelando flujo de caja y TIR...', icon: 'chart' })}\n\n`)
       const financiero = await this.motores.financiero({
         distrito: args.distrito,
         area_vendible_m2: cabida.area_vendible_total,
@@ -533,6 +535,10 @@ export class ChatService {
         num_departamentos: cabida.num_departamentos,
         precio_terreno_usd: args.precio_terreno_usd ?? 0,
         precio_venta_usd_m2: args.precio_venta_usd_m2 ?? 0,
+        area_demolicion_m2: args.area_demolicion_m2 ?? 0,
+        porcentaje_capital_propio: args.porcentaje_capital_propio ?? 60,
+        velocidad_ventas_mensual: args.velocidad_ventas_mensual ?? 0,
+        mezcla_tipologias: args.mezcla_tipologias ?? null,
       })
 
       const resultado = { cabida, estructura, financiero }
