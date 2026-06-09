@@ -1,5 +1,7 @@
-import { Body, Controller, Get, Param, Post, Res, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, Param, Post, Put, Res, UseGuards } from '@nestjs/common'
 import type { Response } from 'express'
+import * as fs from 'fs'
+import * as path from 'path'
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'
 import { CurrentUser } from '../decorators/current-user.decorator'
 import { ChatService } from './chat.service'
@@ -40,11 +42,29 @@ export class ChatController {
     return this.chat.getAnalisisDb(proyectoId)
   }
 
+  @Put(':proyectoId/cronograma')
+  async saveCronograma(@Param('proyectoId') proyectoId: string, @Body() body: any) {
+    await this.chat.guardarCronograma(proyectoId, body)
+    return { ok: true }
+  }
+
   @Get(':proyectoId/sesion')
   async getSesion(@Param('proyectoId') proyectoId: string, @CurrentUser() user: any) {
     const sesion = await this.chat.getOrCreateSesion(proyectoId, user.id)
     const mensajes = await this.chat.getMensajes(sesion.id)
     return { sesion, mensajes }
+  }
+
+  @Get('plano/:proyectoId')
+  downloadPlano(@Param('proyectoId') proyectoId: string, @Res() res: Response) {
+    const buffer = this.chat.getPlano(proyectoId)
+    if (!buffer) {
+      res.status(404).json({ error: 'No hay plano para este proyecto' })
+      return
+    }
+    res.setHeader('Content-Type', 'application/dxf')
+    res.setHeader('Content-Disposition', `attachment; filename="plano-c4-${proyectoId.slice(0, 8)}.dxf"`)
+    res.send(buffer)
   }
 
   @Get('pdf/:proyectoId')
@@ -66,5 +86,28 @@ export class ChatController {
     res.setHeader('Content-Type', 'application/pdf')
     res.setHeader('Content-Disposition', `attachment; filename="informe-c4-${proyectoId.slice(0, 8)}.pdf"`)
     res.send(buffer)
+  }
+
+  @Get('planos/:proyectoId')
+  getPlanos(@Param('proyectoId') proyectoId: string) {
+    return this.chat.getPlanosList(proyectoId)
+  }
+
+  @Get('plano-archivo/:proyectoId/:filename')
+  downloadPlanoArchivo(
+    @Param('proyectoId') proyectoId: string,
+    @Param('filename') filename: string,
+    @Res() res: Response,
+  ) {
+    // Sanitize filename to prevent path traversal
+    const safe = path.basename(filename)
+    const filepath = path.join(process.cwd(), 'storage', 'planos', proyectoId, safe)
+    if (!fs.existsSync(filepath)) {
+      res.status(404).json({ error: 'Plano no encontrado' })
+      return
+    }
+    res.setHeader('Content-Type', 'application/dxf')
+    res.setHeader('Content-Disposition', `attachment; filename="${safe}"`)
+    res.sendFile(filepath)
   }
 }

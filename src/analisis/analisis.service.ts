@@ -21,4 +21,13 @@ export class AnalisisService {
   getByProyecto(proyectoId: string): Promise<AnalisisProyecto | null> {
     return this.repo.findOne({ where: { proyectoId } })
   }
+
+  async guardarCronograma(proyectoId: string, cronograma: any): Promise<void> {
+    const existing = await this.repo.findOne({ where: { proyectoId } })
+    if (existing) {
+      await this.repo.update(existing.id, { cronograma })
+    } else {
+      await this.repo.save(this.repo.create({ proyectoId, cronograma }))
+    }
+  }
 }

@@ -54,6 +54,24 @@ export class MotoresService {
     return data
   }
 
+  async plano(payload: Record<string, any>): Promise<Buffer> {
+    try {
+      const { data } = await axios.post(`${this.baseUrl}/plano`, payload, {
+        timeout: 15_000,
+        responseType: 'arraybuffer',
+      })
+      return Buffer.from(data)
+    } catch (e: unknown) {
+      if (e instanceof AxiosError && e.response?.data) {
+        const body = Buffer.from(e.response.data as ArrayBuffer).toString('utf8')
+        let detail: string
+        try { detail = JSON.parse(body)?.detail ?? body } catch { detail = body.slice(0, 1000) }
+        throw new Error(`Python /plano [${e.response.status}]: ${detail}`)
+      }
+      throw e
+    }
+  }
+
   async healthCheck(): Promise<boolean> {
     try {
       await axios.get(`${this.baseUrl}/health`, { timeout: 3_000 })

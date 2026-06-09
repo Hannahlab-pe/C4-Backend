@@ -11,6 +11,7 @@ import { NormativasModule } from '../normativas/normativas.module'
 import { DocumentosModule } from '../documentos/documentos.module'
 import { KnowledgeBaseModule } from '../knowledge-base/knowledge-base.module'
 import { AnalisisModule } from '../analisis/analisis.module'
+import { ProyectosModule } from '../proyectos/proyectos.module'
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { AnalisisModule } from '../analisis/analisis.module'
     DocumentosModule,
     KnowledgeBaseModule,
     AnalisisModule,
+    ProyectosModule,
   ],
   controllers: [ChatController],
   providers: [ChatService, LlmService, PdfService],

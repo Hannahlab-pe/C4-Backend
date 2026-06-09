@@ -82,6 +82,13 @@ export class RagService implements OnModuleInit {
     this.logger.debug(`insertEmbedding result: ${JSON.stringify(result[0])}`)
   }
 
+  async deleteEmbeddingsByNormativa(normativaId: string): Promise<void> {
+    await this.dataSource.query(
+      'DELETE FROM normativas_embeddings WHERE normativa_id = $1',
+      [normativaId],
+    )
+  }
+
   async search(query: string, distrito?: string, limit = 5): Promise<RagResult[]> {
     const embedding = await this.generateEmbedding(query)
     const vectorStr = `[${embedding.join(',')}]`

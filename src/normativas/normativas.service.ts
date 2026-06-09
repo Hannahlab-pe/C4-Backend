@@ -165,12 +165,15 @@ export class NormativasService implements OnApplicationBootstrap {
       if (!normativa) {
         normativa = await this.normativaRepo.save(data)
         this.logger.log(`Normativa creada: ${normativa.distrito}`)
+      } else {
+        // Upsert: actualizar valores si el seed cambió
+        Object.assign(normativa, data)
+        normativa = await this.normativaRepo.save(normativa)
+        this.logger.log(`Normativa actualizada: ${normativa.distrito}`)
       }
 
-      // Insertar embedding si no existe uno válido para esta normativa
-      const [row] = await this.ragService.countEmbeddings(normativa.id)
-      if (parseInt(row.count) > 0) continue
-
+      // Regenerar embedding (siempre al arrancar para que refleje cambios)
+      await this.ragService.deleteEmbeddingsByNormativa(normativa.id)
       const texto = this.normativaToText(normativa)
       try {
         await this.ragService.insertEmbedding(normativa.id, texto, {
@@ -178,9 +181,41 @@ export class NormativasService implements OnApplicationBootstrap {
           tipo: 'parametros_urbanisticos',
         })
         this.logger.log(`Embedding generado: ${normativa.distrito}`)
-      } catch (err) {
-        this.logger.warn(`Error embedding ${normativa.distrito}: ${err.message}`)
+      } catch (err: any) {
+        this.logger.warn(`Error embedding ${normativa.distrito}: ${err?.message}`)
       }
+    }
+  }
+
+  async create(data: Partial<Normativa>): Promise<Normativa> {
+    const normativa = await this.normativaRepo.save(this.normativaRepo.create(data))
+    await this.refreshEmbedding(normativa)
+    return normativa
+  }
+
+  async update(id: string, data: Partial<Normativa>): Promise<Normativa> {
+    const normativa = await this.normativaRepo.findOneOrFail({ where: { id } })
+    Object.assign(normativa, data)
+    const saved = await this.normativaRepo.save(normativa)
+    await this.refreshEmbedding(saved)
+    return saved
+  }
+
+  async remove(id: string): Promise<void> {
+    await this.ragService.deleteEmbeddingsByNormativa(id)
+    await this.normativaRepo.delete(id)
+  }
+
+  private async refreshEmbedding(normativa: Normativa): Promise<void> {
+    await this.ragService.deleteEmbeddingsByNormativa(normativa.id)
+    const texto = this.normativaToText(normativa)
+    try {
+      await this.ragService.insertEmbedding(normativa.id, texto, {
+        distrito: normativa.distrito,
+        tipo: 'parametros_urbanisticos',
+      })
+    } catch (err) {
+      this.logger.warn(`Error embedding ${normativa.distrito}: ${err.message}`)
     }
   }
 

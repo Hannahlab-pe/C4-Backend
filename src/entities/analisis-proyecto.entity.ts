@@ -20,6 +20,10 @@ export class AnalisisProyecto {
   @Column({ type: 'jsonb', nullable: true })
   financiero: Record<string, any>
 
+  // Estado editable del Gantt de pre-inversión: { inicioISO, frentes, duraciones }
+  @Column({ type: 'jsonb', nullable: true })
+  cronograma: Record<string, any>
+
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date
 }
