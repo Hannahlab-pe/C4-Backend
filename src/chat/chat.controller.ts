@@ -48,6 +48,12 @@ export class ChatController {
     return { ok: true }
   }
 
+  @Put(':proyectoId/seguimiento')
+  async saveSeguimiento(@Param('proyectoId') proyectoId: string, @Body() body: any) {
+    await this.chat.guardarSeguimiento(proyectoId, body)
+    return { ok: true }
+  }
+
   @Get(':proyectoId/sesion')
   async getSesion(@Param('proyectoId') proyectoId: string, @CurrentUser() user: any) {
     const sesion = await this.chat.getOrCreateSesion(proyectoId, user.id)

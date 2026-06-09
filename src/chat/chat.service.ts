@@ -550,6 +550,10 @@ export class ChatService {
     return this.analisisService.guardarCronograma(proyectoId, cronograma)
   }
 
+  guardarSeguimiento(proyectoId: string, seguimiento: any) {
+    return this.analisisService.guardarSeguimiento(proyectoId, seguimiento)
+  }
+
   async getOrCreateSesion(proyectoId: string, userId: string): Promise<Sesion> {
     const existing = await this.sesionRepo.findOne({
       where: { proyectoId, usuarioId: userId, estado: EstadoSesion.ACTIVA },

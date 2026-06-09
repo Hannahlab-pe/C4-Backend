@@ -24,6 +24,10 @@ export class AnalisisProyecto {
   @Column({ type: 'jsonb', nullable: true })
   cronograma: Record<string, any>
 
+  // Seguimiento de obra: { avance: {...}, cierre: {...} } — datos reales vs proyectado
+  @Column({ type: 'jsonb', nullable: true })
+  seguimiento: Record<string, any>
+
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date
 }

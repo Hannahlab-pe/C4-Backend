@@ -30,4 +30,13 @@ export class AnalisisService {
       await this.repo.save(this.repo.create({ proyectoId, cronograma }))
     }
   }
+
+  async guardarSeguimiento(proyectoId: string, seguimiento: any): Promise<void> {
+    const existing = await this.repo.findOne({ where: { proyectoId } })
+    if (existing) {
+      await this.repo.update(existing.id, { seguimiento })
+    } else {
+      await this.repo.save(this.repo.create({ proyectoId, seguimiento }))
+    }
+  }
 }
