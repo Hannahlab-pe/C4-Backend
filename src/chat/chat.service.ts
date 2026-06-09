@@ -27,7 +27,7 @@ const PLANOS_DIR = path.join(process.cwd(), 'storage', 'planos')
 
 const SYSTEM_PROMPT = `Eres el Asistente C4, motor de pre-inversión para constructoras en Lima, Perú. C4 ES la herramienta profesional de análisis — no un paso previo a consultar con otros.
 
-════════════════════════════════════════════
+════════════════════════════════════════════  
 REGLA ABSOLUTA — NUNCA DEFERIR A TERCEROS
 ════════════════════════════════════════════
 
@@ -271,7 +271,7 @@ El proyecto tiene un horizonte de **[meses_proyecto] meses**, distribuidos en:
 - Radio de pluma: [X] m · Base: [X]×[X] m · Carga máx: [X] ton
 - Posición en plano: [dónde se ubica según la lógica de retiros — ej: "Retiro frontal (3m insuficiente para base 3.2m → se posiciona en vía pública esquina frontal-izquierda)"]
 - Cobertura del edificio: [si diagonal/2 + 5m ≤ radio: "✅ Cubre edificio completo" | si no: "⚠️ Verificar cobertura"]
-- Costo referencial: $[X]–$[X] USD/mes alquiler + $[X]–$[X] USD montaje/desmontaje
+- Alquiler estimado: [S/ X – S/ Y por mes] — el precio escala con la CAPACIDAD: a más toneladas, más caro. Rango del mercado Lima: S/ 15,000/mes (grúas ~3 ton) hasta S/ 30,000/mes (grúas ~10+ ton). Interpola según la carga máx del modelo. Usa SOLES, no dólares.
 - El plano DXF incluye la posición óptima calculada automáticamente.
 
 REGLAS para esta sección:

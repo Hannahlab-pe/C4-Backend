@@ -352,17 +352,20 @@ OTROS DISTRIBUIDORES LIMA (referencial):
   → DAHAN / GJJ: importación China directa o brokers maquinaria pesada
 
 ──────────────────────────────────────────────────────────────
-COSTOS REFERENCIALES DE ALQUILER (Lima, 2025 — orientativo)
+COSTOS REFERENCIALES DE ALQUILER (Lima, 2026 — en SOLES)
 ──────────────────────────────────────────────────────────────
 
-| Tipo de grúa               | Alquiler mensual USD (ref.) | Montaje / desmontaje USD |
-|----------------------------|-----------------------------|--------------------------|
-| JASO J4510 / J5010         | $3,500 – $5,500             | $8,000 – $12,000         |
-| Potain MC85B City Crane    | $5,000 – $7,500             | $10,000 – $15,000        |
-| Liebherr 85 EC-B 5         | $6,000 – $9,000             | $12,000 – $18,000        |
-| Liebherr 50 EC-B 8         | $9,000 – $14,000            | $18,000 – $28,000        |
-| Potain MC175C              | $12,000 – $18,000           | $25,000 – $40,000        |
+REGLA DE PRECIO: el alquiler mensual escala con la CAPACIDAD de la grúa.
+A más toneladas de carga máxima, más cara. Rango del mercado Lima:
+  • Grúas ~3 ton (City Crane chica, MC68B):        ~S/ 15,000 /mes
+  • Grúas ~5 ton (MC85B, J5010, MCT85, S-46):      ~S/ 19,000 – 21,000 /mes
+  • Grúas ~8 ton (MC175B, MCH125, MCT185):         ~S/ 24,000 – 27,000 /mes
+  • Grúas ~10+ ton (MC205B, MCR160, Liebherr 50):  ~S/ 28,000 – 30,000 /mes
 
-NOTA: Los costos de grúa representan aprox. 2–5% del costo total de construcción.
-Para un edificio de 1,000 m² construidos a $600/m², el costo grúa es ~$12,000–$30,000.
+Fórmula orientativa: precio ≈ S/ 15,000 + (toneladas − 3) / 7 × S/ 15,000,
+acotado al rango S/ 15,000 (mín) – S/ 30,000 (máx) por mes.
+Las grúas LUFFING (MCH/MCR) tienden al extremo alto del rango por su mayor complejidad.
+
+NOTA: El alquiler de grúa representa aprox. 2–5% del costo total de construcción.
+Siempre expresa el alquiler de grúa en SOLES (no dólares).
 `
