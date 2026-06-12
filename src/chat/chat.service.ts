@@ -19,6 +19,7 @@ import { DocumentosService } from '../documentos/documentos.service'
 import { KnowledgeBaseService } from '../knowledge-base/knowledge-base.service'
 import { AnalisisService } from '../analisis/analisis.service'
 import { ProyectosService } from '../proyectos/proyectos.service'
+import { FasesDetalleService } from '../fases-detalle/fases-detalle.service'
 import { RNE_CONTEXTO } from './rne-contexto'
 import { COSTOS_REVISTA } from './costos-revista'
 import { GRUAS_FICHAS_TECNICAS } from './gruas-fichas'
@@ -116,10 +117,44 @@ MODO D — GENERACIÓN DEL PROYECTO (reglas)
 
 - SOLO llama a generar_proyecto cuando el usuario confirme explícitamente (responde "sí", "dale", "genera", "comienza" a tu pregunta de cierre).
 - Antes de llamar, asegúrate de tener un análisis ejecutado (analisis_completo) — si no lo hay, ejecútalo primero con los datos disponibles.
-- Construye las tareas con la DATA REAL de la conversación: m³ de excavación según sótanos y área, nº de pisos para el casco, modelo de grúa seleccionado, nº de departamentos para acabados, trámites del distrito específico en administración.
+- VALIDACIÓN DE CIFRAS: usa EXACTAMENTE los números del último analisis_completo (pisos, sótanos, departamentos, áreas, costos). NO uses cifras anteriores de la conversación que ya fueron corregidas/ajustadas.
 - Incluye la fase demolicion SOLO si hay construcción existente que demoler.
 - En equipos: incluye la grúa torre recomendada (con su modelo y costo en soles), y maquinaria justificada (excavadora si hay sótanos, bomba de concreto si pisos > 8, etc.).
 - Después de la tool, resume al usuario qué se generó en cada módulo y dile que puede verlo en las pestañas de fases del proyecto.
+
+CADA FASE LLEVA "detalle.secciones" OBLIGATORIO — así se conforma cada módulo profesionalmente.
+Todos los valores salen de la data REAL del proyecto (análisis, normativa, documentos, conversación):
+
+▸ demolicion (solo si aplica):
+  1. "Datos generales" (kv): área a demoler m², tipo de estructura existente, nº pisos existentes, costo estimado ($45/m² motor C4)
+  2. "Permisos y trámites" (tabla, columnas: Trámite | Entidad | Plazo est.): licencia de demolición (municipalidad), comunicación a vecinos colindantes, autorización de botadero/escombrera (DGR), póliza CAR
+  3. "Seguridad y protecciones" (lista): cerco perimetral, señalización, protección de medianeros, apuntalamiento de vecinos si aplica, supervisor SSOMA
+  4. "Gestión de residuos" (kv): volumen desmonte estimado (área × 0.8 m³/m²), nº viajes volquete 15 m³, botadero autorizado
+  5. "Método de demolición" (kv): método (manual/mecánica/mixta), secuencia (de arriba hacia abajo), equipo principal
+
+▸ excavacion:
+  1. "Datos de excavación" (kv): nº sótanos, profundidad estimada (sótanos × 3.5m), volumen m³ (planta libre × sótanos × 3.5), tipo de suelo si se conoce
+  2. "Sostenimiento" (lista): calzaduras perimetrales, anclajes si profundidad > 7m, control topográfico de vecinos
+  3. "Gestión de material" (kv): nº viajes volquete 15 m³, distancia a botadero
+  4. "Permisos" (tabla, columnas: Trámite | Entidad): permiso de excavación, plan de desvío si ocupa vía, seguro CAR
+
+▸ construccion:
+  1. "Partidas estructurales" (tabla, columnas: Partida | Metrado | Unidad): cimentación/platea, columnas y placas, vigas, losas (nº de losas = pisos), escaleras, cisterna y tanque — con metrados derivados del análisis (concreto m³, acero ton)
+  2. "Materiales clave" (tabla, columnas: Material | Cantidad est. | Observación): concreto premezclado f'c=210, acero fy=4200, encofrado, ladrillo
+  3. "Ciclo de construcción" (kv): días por losa (~7), frentes de trabajo, piso de izaje con grúa, duración casco (semanas del cronograma)
+  4. "Control de calidad" (lista): probetas de concreto por vaciado, ensayos de acero, control topográfico, supervisión estructural
+
+▸ acabados:
+  1. "Cuadro de acabados" (tabla, columnas: Ambiente | Piso | Paredes | Techo): sala-comedor, dormitorios, baños, cocina — acabados según el segmento del proyecto (premium en San Isidro/Miraflores, estándar en otros)
+  2. "Especialidades" (tabla, columnas: Especialidad | Alcance): albañilería/tabiquería, instalaciones sanitarias, eléctricas, gas, drywall, carpintería madera, carpintería aluminio/vidrio, pintura
+  3. "Equipamiento de áreas comunes" (lista): ascensor(es), intercomunicadores, CCTV, portón de garaje, bombas de agua
+  4. "Datos" (kv): nº departamentos, área vendible total, área promedio por depto
+
+▸ administracion:
+  1. "Trámites y licencias" (tabla, columnas: Trámite | Entidad | Cuándo | Costo est.): licencia de edificación (municipio del distrito), conformidad de obra, declaratoria de fábrica (SUNARP), independización (SUNARP), entrega
+  2. "Plan de ventas" (kv): nº unidades, velocidad de ventas (deptos/mes), preventa mínima para banco (30%), precio promedio por depto
+  3. "Seguros y contratos" (lista): póliza CAR, contratos con subcontratistas, contratos de compraventa, garantías post-venta
+  4. "Control financiero" (kv): presupuesto total, capital propio %, línea bancaria, punto de equilibrio (nº deptos)
 
 ════════════════════════════════════════════
 FLUJO DE ENTREVISTA GUIADA (Modo B)
@@ -584,8 +619,42 @@ const C4_TOOLS: LlmTool[] = [
                   items: { type: 'string' },
                   description: 'Tareas específicas del proyecto en orden de ejecución. Ej: "Excavar 2 sótanos (~1,750 m³) con calzaduras perimetrales", "Vaciar losa piso 3 (302 m²)". Entre 5 y 12 por fase.',
                 },
+                detalle: {
+                  type: 'object',
+                  description: 'Secciones estructuradas del módulo de la fase (sub-módulos profesionales). OBLIGATORIO: usa las secciones especificadas en el system prompt para cada fase, con datos REALES del proyecto.',
+                  properties: {
+                    secciones: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          titulo: { type: 'string', description: 'Título de la sección. Ej: "Gestión de residuos"' },
+                          tipo: { type: 'string', enum: ['kv', 'tabla', 'lista'], description: 'kv = pares dato/valor · tabla = columnas+filas · lista = viñetas' },
+                          kv: {
+                            type: 'array',
+                            description: 'Solo si tipo=kv. Pares label/valor.',
+                            items: {
+                              type: 'object',
+                              properties: { label: { type: 'string' }, valor: { type: 'string' } },
+                              required: ['label', 'valor'],
+                            },
+                          },
+                          columnas: { type: 'array', items: { type: 'string' }, description: 'Solo si tipo=tabla. Cabeceras.' },
+                          filas: {
+                            type: 'array',
+                            items: { type: 'array', items: { type: 'string' } },
+                            description: 'Solo si tipo=tabla. Filas alineadas a las columnas.',
+                          },
+                          items: { type: 'array', items: { type: 'string' }, description: 'Solo si tipo=lista.' },
+                        },
+                        required: ['titulo', 'tipo'],
+                      },
+                    },
+                  },
+                  required: ['secciones'],
+                },
               },
-              required: ['fase', 'tareas'],
+              required: ['fase', 'tareas', 'detalle'],
             },
           },
           equipos: {
@@ -631,6 +700,7 @@ export class ChatService {
     private kb: KnowledgeBaseService,
     private analisisService: AnalisisService,
     private proyectosService: ProyectosService,
+    private fasesDetalle: FasesDetalleService,
   ) {}
 
   getAnalisis(proyectoId: string): any | undefined {
@@ -897,7 +967,7 @@ export class ChatService {
 
     const resumen: Record<string, number> = {}
     try {
-      for (const f of fases) {
+      for (const f of fases as any[]) {
         res.write(`event:status\ndata:${JSON.stringify({ step: `Generando módulo de ${f.fase}...`, icon: 'layers' })}\n\n`)
         // Sobrescribir el checklist de la fase con las tareas específicas del proyecto
         await this.tareaFaseRepo.delete({ proyectoId, fase: f.fase })
@@ -906,6 +976,14 @@ export class ChatService {
         )
         await this.tareaFaseRepo.save(tareas)
         resumen[f.fase] = tareas.length
+
+        // Secciones estructuradas del módulo (sub-módulos)
+        if (f.detalle?.secciones && Array.isArray(f.detalle.secciones)) {
+          const secciones = f.detalle.secciones
+            .filter((s: any) => s?.titulo && ['kv', 'tabla', 'lista'].includes(s?.tipo))
+            .slice(0, 10)
+          await this.fasesDetalle.guardar(proyectoId, f.fase, { secciones })
+        }
       }
 
       // Equipos recomendados (opcional)

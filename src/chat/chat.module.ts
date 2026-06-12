@@ -14,6 +14,7 @@ import { DocumentosModule } from '../documentos/documentos.module'
 import { KnowledgeBaseModule } from '../knowledge-base/knowledge-base.module'
 import { AnalisisModule } from '../analisis/analisis.module'
 import { ProyectosModule } from '../proyectos/proyectos.module'
+import { FasesDetalleModule } from '../fases-detalle/fases-detalle.module'
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { ProyectosModule } from '../proyectos/proyectos.module'
     KnowledgeBaseModule,
     AnalisisModule,
     ProyectosModule,
+    FasesDetalleModule,
   ],
   controllers: [ChatController],
   providers: [ChatService, LlmService, PdfService],
