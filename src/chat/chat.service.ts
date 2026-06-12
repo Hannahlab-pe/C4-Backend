@@ -6,6 +6,8 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { Sesion, EstadoSesion } from '../entities/sesion.entity'
 import { Mensaje } from '../entities/mensaje.entity'
+import { TareaFase } from '../entities/tarea-fase.entity'
+import { EquipoFase } from '../entities/equipo-fase.entity'
 import { LlmService, LlmMessage, LlmTool, ToolCall, LlmContentPart } from './llm.service'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const pdfParse = require('pdf-parse')
@@ -27,7 +29,7 @@ const PLANOS_DIR = path.join(process.cwd(), 'storage', 'planos')
 
 const SYSTEM_PROMPT = `Eres el Asistente C4, motor de pre-inversión para constructoras en Lima, Perú. C4 ES la herramienta profesional de análisis — no un paso previo a consultar con otros.
 
-════════════════════════════════════════════  
+════════════════════════════════════════════ 
 REGLA ABSOLUTA — NUNCA DEFERIR A TERCEROS
 ════════════════════════════════════════════
 
@@ -48,19 +50,29 @@ FUENTES DE CONOCIMIENTO — REGLA FUNDAMENTAL
 Solo puedes responder usando estas fuentes, en orden de prioridad:
 
 1. CONVERSACIÓN: datos que el usuario mencionó en este chat (área, precio, dirección, preferencias)
-2. BASE DE CONOCIMIENTO (KB): documentos subidos por la empresa — buscar_en_base_de_conocimiento
-3. NORMATIVAS: parámetros urbanísticos del distrito — consultar_normativa
-4. MOTORES: resultados de cabida, estructura y financiero — analisis_completo
+2. DOCUMENTOS DEL PROYECTO: planos, contratos, PDFs y archivos que el usuario subió a este proyecto
+3. BASE DE CONOCIMIENTO (KB): documentos subidos por la empresa — buscar_en_base_de_conocimiento
+4. NORMATIVAS: parámetros urbanísticos del distrito — consultar_normativa
+5. MOTORES: resultados de cabida, estructura y financiero — analisis_completo
+6. INTERNET: información actual y verificable — buscar_en_internet
 
-PROHIBIDO usar tu conocimiento de entrenamiento para responder preguntas técnicas, normativas, de procedimientos, precios o especificaciones. Si la respuesta no está en alguna de las 4 fuentes anteriores, di exactamente:
-"No encontré esa información en los documentos disponibles. Si tienes la norma o manual correspondiente, puedes subirlo al proyecto."
+REGLAS PARA INTERNET (fuente de último recurso, pero úsala sin miedo cuando aplique):
+- Úsala SOLO cuando las fuentes internas (1–5) no tengan la respuesta: precios actuales de mercado, proveedores, ordenanzas publicadas en la web, links oficiales, noticias del sector, trámites municipales.
+- SIEMPRE cita la URL en tu respuesta con formato markdown: [título de la fuente](url).
+- Si una fuente interna contradice a internet, gana la fuente interna — pero menciona la discrepancia.
+- Si el usuario pide links o "el paso a paso" de un trámite, busca en internet y entrega los links oficiales (municipalidad, SUNARP, etc.).
+
+PROHIBIDO usar tu conocimiento de entrenamiento para responder preguntas técnicas, normativas, de procedimientos, precios o especificaciones. Si la respuesta no está en las fuentes 1–5, BUSCA EN INTERNET antes de rendirte. Solo si tampoco está en internet, di:
+"No encontré esa información en los documentos disponibles ni en fuentes públicas. Si tienes la norma o manual correspondiente, puedes subirlo al proyecto."
 
 CÓMO COMBINAR FUENTES:
 Puedes y debes cruzar datos de varias fuentes en la misma respuesta. Cita siempre el origen de cada dato:
 - "Según [nombre del documento KB]..." → dato de la base de conocimiento
+- "En tu [contrato/plano/documento X que subiste]..." → dato de documentos del proyecto
 - "El usuario indicó que..." → dato de la conversación
 - "Según la normativa de [distrito]..." → dato de consultar_normativa
 - "El motor calcula..." → dato de los motores Python
+- "Según [fuente](url)..." → dato de internet, siempre con link
 Ejemplo: "El usuario indicó un precio de terreno de $900k. Según la normativa de Miraflores, aplican 12 pisos máx. El motor calcula una TIR de 24%."
 
 ════════════════════════════════════════════
@@ -69,9 +81,45 @@ MODO DE OPERACIÓN
 
 A) CONVERSACIÓN NORMAL: Saludos, preguntas técnicas, comentarios sobre análisis ya realizado → responde con las fuentes disponibles, sin re-ejecutar análisis.
 
-B) ENTREVISTA DE PRE-INVERSIÓN: Cuando el usuario menciona que tiene un terreno → conduce la entrevista de 5 pasos y ejecuta el análisis al final.
+B) ENTREVISTA DE PRE-INVERSIÓN: Cuando el usuario menciona que tiene un terreno y NO tiene el proyecto definido → conduce la entrevista de 5 pasos y ejecuta el análisis al final. Es el modo para usuarios que necesitan que C4 les recomiende qué construir.
 
-Regla clave: si ya hay un análisis en el historial y el usuario solo pregunta sobre él, usa modo A. Si el usuario pide RECALCULAR con datos nuevos → vuelve al punto de inicio de la entrevista solo para los datos que cambiaron.
+C) AUDITORÍA DE PROYECTO: Cuando el usuario YA tiene su proyecto definido (subió planos, contratos, presupuestos, memoria descriptiva u otros documentos, o dice "ya tengo todo, solo dime qué mejorar / revisa esto") → NO lo entrevistes como novato. Tu rol cambia a AUDITOR SENIOR. Ver flujo detallado abajo.
+
+D) GENERACIÓN DEL PROYECTO: Cuando el análisis o la auditoría están completos y validados → pregunta "¿Comienzo con la generación del proyecto?" y si el usuario confirma, llama a generar_proyecto. Ver reglas abajo.
+
+Regla clave: si ya hay un análisis en el historial y el usuario solo pregunta sobre él, usa modo A. Si el usuario pide RECALCULAR con datos nuevos → vuelve al punto de inicio de la entrevista solo para los datos que cambiaron. Detecta el modo por las señales del usuario: documentos subidos + datos cerrados = modo C; terreno sin definir = modo B.
+
+════════════════════════════════════════════
+MODO C — AUDITORÍA DE PROYECTO (paso a paso)
+════════════════════════════════════════════
+
+Cuando detectes este modo, ejecuta esta secuencia:
+
+PASO C1 — INVENTARIO: Lee TODOS los documentos del proyecto disponibles en tu contexto. Extrae y lista los datos clave encontrados, citando el documento de origen de cada uno: ubicación/distrito, área del terreno, frente/fondo, pisos proyectados, sótanos, nº de unidades, áreas, presupuesto, plazos, condiciones de contratos, partes firmantes, montos.
+Formato: "📄 **Encontré esto:** Según [documento], ..."
+
+PASO C2 — CRUCE NORMATIVO: Llama a consultar_normativa con el distrito y a buscar_en_base_de_conocimiento para los temas técnicos detectados. Cruza CADA dato del proyecto contra la normativa. Si necesitas ordenanzas o trámites actuales, usa buscar_en_internet.
+
+PASO C3 — INCIDENCIAS: Reporta TODO conflicto encontrado, con esta estructura:
+⚠️ **Incidencia [N]:** [descripción]. Tu [documento] dice [X], pero [la normativa de DISTRITO / el RNE / la fuente] establece [Y].
+→ Pregunta al usuario lo que corresponda: "¿Cuentas con permisos especiales / certificado de parámetros que lo respalde?"
+Ejemplo: "Tu memoria descriptiva dice 20 pisos, pero la normativa de San Isidro permite máximo 15 en esa zona. ¿Tienes un certificado de parámetros especial o colindancia con zona de mayor altura?"
+
+PASO C4 — PUNTOS DE MEJORA: Lista mejoras concretas con números (igual de exigente que el Veredicto del informe: nada de consejos vagos). Incluye links útiles de internet si aplican (trámites, ordenanzas, proveedores).
+
+PASO C5 — CIERRE: Si no hay incidencias bloqueantes (o el usuario las resolvió), di explícitamente:
+"El proyecto está validado. **¿Comienzo con la generación del proyecto?** Esto rellenará los módulos de Demolición, Excavación, Construcción, Acabados y Administración con el plan de ejecución específico de tu proyecto."
+
+════════════════════════════════════════════
+MODO D — GENERACIÓN DEL PROYECTO (reglas)
+════════════════════════════════════════════
+
+- SOLO llama a generar_proyecto cuando el usuario confirme explícitamente (responde "sí", "dale", "genera", "comienza" a tu pregunta de cierre).
+- Antes de llamar, asegúrate de tener un análisis ejecutado (analisis_completo) — si no lo hay, ejecútalo primero con los datos disponibles.
+- Construye las tareas con la DATA REAL de la conversación: m³ de excavación según sótanos y área, nº de pisos para el casco, modelo de grúa seleccionado, nº de departamentos para acabados, trámites del distrito específico en administración.
+- Incluye la fase demolicion SOLO si hay construcción existente que demoler.
+- En equipos: incluye la grúa torre recomendada (con su modelo y costo en soles), y maquinaria justificada (excavadora si hay sótanos, bomba de concreto si pisos > 8, etc.).
+- Después de la tool, resume al usuario qué se generó en cada módulo y dile que puede verlo en las pestañas de fases del proyecto.
 
 ════════════════════════════════════════════
 FLUJO DE ENTREVISTA GUIADA (Modo B)
@@ -494,6 +542,71 @@ const C4_TOOLS: LlmTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'buscar_en_internet',
+      description:
+        'Busca información ACTUAL en internet (precios de mercado, proveedores, ordenanzas municipales publicadas, noticias del sector construcción, tipos de cambio). Usar SOLO cuando la información no esté en la Base de Conocimiento ni en las normativas internas. Devuelve un resumen con citas de URL que SIEMPRE debes incluir en tu respuesta como links.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Búsqueda específica con contexto Perú/Lima. Ej: "precio actual saco cemento Sol Lima 2026", "ordenanza parámetros urbanísticos Surquillo", "proveedores alquiler grúa torre Lima".',
+          },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'generar_proyecto',
+      description:
+        'Genera el plan de ejecución del proyecto: rellena los checklists de tareas y equipos de cada fase (demolición, excavación, construcción, acabados, administración) en los módulos del sistema, usando TODA la data de la conversación (análisis, documentos, auditoría). Llamar SOLO después de que el usuario confirme explícitamente que quiere generar el proyecto (responde sí a "¿Comienzo con la generación del proyecto?"). SOBRESCRIBE los checklists existentes de las fases incluidas.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fases: {
+            type: 'array',
+            description: 'Fases a generar con sus tareas específicas. Incluir SOLO las fases que apliquen (ej: demolición solo si hay construcción existente). Tareas concretas con cantidades y datos reales de ESTE proyecto, no genéricas.',
+            items: {
+              type: 'object',
+              properties: {
+                fase: {
+                  type: 'string',
+                  description: 'Slug de la fase: demolicion | excavacion | construccion | acabados | administracion',
+                },
+                tareas: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Tareas específicas del proyecto en orden de ejecución. Ej: "Excavar 2 sótanos (~1,750 m³) con calzaduras perimetrales", "Vaciar losa piso 3 (302 m²)". Entre 5 y 12 por fase.',
+                },
+              },
+              required: ['fase', 'tareas'],
+            },
+          },
+          equipos: {
+            type: 'array',
+            description: 'Equipos/maquinaria recomendados por fase, derivados del análisis (grúa seleccionada, excavadora si hay sótanos, etc.). Solo equipos justificados por la data del proyecto.',
+            items: {
+              type: 'object',
+              properties: {
+                fase: { type: 'string', description: 'Slug de la fase donde se usa' },
+                nombre: { type: 'string', description: 'Ej: "Grúa torre Potain MC85B", "Excavadora CAT 320"' },
+                tipo: { type: 'string', description: 'grua | excavadora | retroexcavadora | volquete | mezcladora | bomba_concreto | andamios | otro' },
+                notas: { type: 'string', description: 'Justificación breve. Ej: "Radio 50m cubre todo el edificio; alquiler ~S/ 20,000/mes"' },
+              },
+              required: ['fase', 'nombre', 'tipo'],
+            },
+          },
+        },
+        required: ['fases'],
+      },
+    },
+  },
 ]
 
 // ─── Service ───────────────────────────────────────────────────────────────────
@@ -508,6 +621,8 @@ export class ChatService {
   constructor(
     @InjectRepository(Sesion) private sesionRepo: Repository<Sesion>,
     @InjectRepository(Mensaje) private mensajeRepo: Repository<Mensaje>,
+    @InjectRepository(TareaFase) private tareaFaseRepo: Repository<TareaFase>,
+    @InjectRepository(EquipoFase) private equipoFaseRepo: Repository<EquipoFase>,
     private llm: LlmService,
     private motores: MotoresService,
     private normativas: NormativasService,
@@ -722,6 +837,8 @@ export class ChatService {
     if (name === 'analisis_completo') return this.toolAnalisisCompleto(args, res, proyectoId)
     if (name === 'generar_pdf') return this.toolGenerarPdf(args, res, proyectoId)
     if (name === 'generar_plano') return this.toolGenerarPlano(args, res, proyectoId)
+    if (name === 'buscar_en_internet') return this.toolBuscarInternet(args.query, res)
+    if (name === 'generar_proyecto') return this.toolGenerarProyecto(args, res, proyectoId)
 
     return { error: `Tool desconocida: ${name}` }
   }
@@ -746,6 +863,84 @@ export class ChatService {
     } catch (err: any) {
       this.logger.warn(`KB tool error: ${err?.message}`)
       return { error: `Error consultando base de conocimiento: ${err?.message}` }
+    }
+  }
+
+  private async toolBuscarInternet(query: string, res: Response): Promise<any> {
+    res.write(`event:status\ndata:${JSON.stringify({ step: 'Buscando en internet...', icon: 'globe' })}\n\n`)
+    try {
+      const { texto, citas } = await this.llm.webSearch(query)
+      this.logger.log(`Web search "${query.slice(0, 60)}": ${citas.length} citas`)
+      if (!texto) {
+        return { encontrado: false, mensaje: 'La búsqueda no devolvió resultados útiles.' }
+      }
+      return {
+        encontrado: true,
+        resumen: texto,
+        fuentes: citas,
+        instruccion: 'Cita las fuentes con sus URLs en tu respuesta usando formato markdown [título](url).',
+      }
+    } catch (err: any) {
+      this.logger.warn(`Web search error: ${err?.response?.data?.error?.message ?? err?.message}`)
+      return { error: `Error en búsqueda web: ${err?.response?.data?.error?.message ?? err?.message}` }
+    }
+  }
+
+  private async toolGenerarProyecto(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const FASES_VALIDAS = ['demolicion', 'excavacion', 'construccion', 'acabados', 'administracion']
+    const fases: { fase: string; tareas: string[] }[] = (args.fases ?? []).filter(
+      (f: any) => FASES_VALIDAS.includes(f?.fase) && Array.isArray(f?.tareas) && f.tareas.length > 0,
+    )
+    if (fases.length === 0) {
+      return { error: 'No se recibieron fases válidas. Fases permitidas: ' + FASES_VALIDAS.join(', ') }
+    }
+
+    const resumen: Record<string, number> = {}
+    try {
+      for (const f of fases) {
+        res.write(`event:status\ndata:${JSON.stringify({ step: `Generando módulo de ${f.fase}...`, icon: 'layers' })}\n\n`)
+        // Sobrescribir el checklist de la fase con las tareas específicas del proyecto
+        await this.tareaFaseRepo.delete({ proyectoId, fase: f.fase })
+        const tareas = f.tareas.slice(0, 15).map((texto: string, i: number) =>
+          this.tareaFaseRepo.create({ proyectoId, fase: f.fase, texto: String(texto).slice(0, 500), orden: i }),
+        )
+        await this.tareaFaseRepo.save(tareas)
+        resumen[f.fase] = tareas.length
+      }
+
+      // Equipos recomendados (opcional)
+      const equipos: any[] = (args.equipos ?? []).filter(
+        (e: any) => FASES_VALIDAS.includes(e?.fase) && e?.nombre,
+      )
+      if (equipos.length > 0) {
+        res.write(`event:status\ndata:${JSON.stringify({ step: 'Asignando equipos recomendados...', icon: 'truck' })}\n\n`)
+        for (const e of equipos.slice(0, 20)) {
+          const yaExiste = await this.equipoFaseRepo.findOne({
+            where: { proyectoId, fase: e.fase, nombre: e.nombre },
+          })
+          if (!yaExiste) {
+            await this.equipoFaseRepo.save(this.equipoFaseRepo.create({
+              proyectoId,
+              fase: e.fase,
+              nombre: String(e.nombre).slice(0, 200),
+              tipo: String(e.tipo ?? 'otro').slice(0, 50),
+              notas: String(e.notas ?? '').slice(0, 500),
+            }))
+          }
+        }
+      }
+
+      res.write(`event:proyecto_generado\ndata:${JSON.stringify({ fases: Object.keys(resumen) })}\n\n`)
+      this.logger.log(`Proyecto ${proyectoId} generado: ${JSON.stringify(resumen)}`)
+      return {
+        ok: true,
+        modulos_generados: resumen,
+        equipos_asignados: (args.equipos ?? []).length,
+        mensaje: 'Módulos del proyecto generados. El usuario puede verlos en las pestañas de cada fase (Demolición, Excavación, Construcción, Acabados, Administración). Resume qué se generó en cada fase.',
+      }
+    } catch (err: any) {
+      this.logger.error('Error generando proyecto:', err?.message)
+      return { error: `Error generando módulos del proyecto: ${err?.message}` }
     }
   }
 

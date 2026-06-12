@@ -167,6 +167,53 @@ export class LlmService {
     }
   }
 
+  // ── Web search nativa de OpenAI ───────────────────────────────────────────────
+  // Usa el modelo search-preview con web_search_options. Devuelve texto + citas URL.
+
+  async webSearch(query: string): Promise<{ texto: string; citas: { titulo: string; url: string }[] }> {
+    if (!this.openaiApiKey) {
+      return { texto: 'Búsqueda web no disponible: OPENAI_API_KEY no configurada.', citas: [] }
+    }
+
+    const { data } = await axios.post(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        model: 'gpt-4o-mini-search-preview',
+        web_search_options: { search_context_size: 'medium' },
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Eres un investigador para una constructora en Lima, Perú. Busca información actual y verificable. Responde en español, conciso y con datos concretos (precios, fechas, fuentes). Prioriza fuentes peruanas oficiales y del sector construcción.',
+          },
+          { role: 'user', content: query },
+        ],
+      },
+      {
+        headers: { Authorization: `Bearer ${this.openaiApiKey}` },
+        timeout: 60_000,
+      },
+    )
+
+    const msg = data.choices?.[0]?.message
+    const texto: string = msg?.content ?? ''
+    const citas = (msg?.annotations ?? [])
+      .filter((a: any) => a.type === 'url_citation' && a.url_citation?.url)
+      .map((a: any) => ({
+        titulo: a.url_citation.title ?? a.url_citation.url,
+        url: a.url_citation.url,
+      }))
+    // Dedup por URL
+    const vistas = new Set<string>()
+    const citasUnicas = citas.filter((c: { url: string }) => {
+      if (vistas.has(c.url)) return false
+      vistas.add(c.url)
+      return true
+    })
+
+    return { texto, citas: citasUnicas }
+  }
+
   private async streamVllm(messages: { role: string; content: string }[], res: Response): Promise<string> {
     const response = await axios.post(
       `${this.vllmUrl}/v1/chat/completions`,
