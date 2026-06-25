@@ -1298,6 +1298,25 @@ export class ChatService {
     }
   }
 
+  /** Transcribe audio (dictado por voz) con OpenAI. */
+  async transcribir(body: { audioBase64: string; mimeType?: string }): Promise<{ texto: string }> {
+    if (!body.audioBase64) return { texto: '' }
+    try {
+      const buf = Buffer.from(body.audioBase64, 'base64')
+      const mt = (body.mimeType ?? '').toLowerCase()
+      const ext = mt.includes('ogg') ? 'ogg' : mt.includes('mp4') || mt.includes('m4a') ? 'mp4' : mt.includes('wav') ? 'wav' : 'webm'
+      return { texto: await this.llm.transcribir(buf, `audio.${ext}`) }
+    } catch (e: any) {
+      this.logger.error('Error transcribiendo audio:', e?.response?.data?.error?.message ?? e?.message)
+      return { texto: '' }
+    }
+  }
+
+  /** Genera audio (voz natural) de un texto con OpenAI TTS. */
+  async tts(texto: string): Promise<Buffer> {
+    return this.llm.tts((texto ?? '').trim() || 'Sin contenido.')
+  }
+
   /** Lee un Estudio de Mecánica de Suelos (PDF) y extrae los parámetros geotécnicos. */
   async analizarEms(body: { pdfBase64: string; nombre?: string }): Promise<{ datos?: any; error?: string }> {
     if (!body.pdfBase64) return { error: 'Falta el PDF del EMS.' }

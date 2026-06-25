@@ -214,6 +214,32 @@ export class LlmService {
     return { texto, citas: citasUnicas }
   }
 
+  // ── Voz: transcripción (STT) y síntesis (TTS) con OpenAI ─────────────────────
+
+  async transcribir(audio: Buffer, filename: string): Promise<string> {
+    if (!this.openaiApiKey) return ''
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const FormData = require('form-data')
+    const form = new FormData()
+    form.append('file', audio, { filename, contentType: 'application/octet-stream' })
+    form.append('model', 'gpt-4o-mini-transcribe')
+    form.append('language', 'es')
+    const { data } = await axios.post('https://api.openai.com/v1/audio/transcriptions', form, {
+      headers: { ...form.getHeaders(), Authorization: `Bearer ${this.openaiApiKey}` },
+      timeout: 60_000, maxBodyLength: Infinity, maxContentLength: Infinity,
+    })
+    return data?.text ?? ''
+  }
+
+  async tts(text: string, voice = 'nova'): Promise<Buffer> {
+    const { data } = await axios.post(
+      'https://api.openai.com/v1/audio/speech',
+      { model: 'gpt-4o-mini-tts', voice, input: text.slice(0, 4000), response_format: 'mp3' },
+      { headers: { Authorization: `Bearer ${this.openaiApiKey}` }, responseType: 'arraybuffer', timeout: 60_000 },
+    )
+    return Buffer.from(data)
+  }
+
   private async streamVllm(messages: { role: string; content: string }[], res: Response): Promise<string> {
     const response = await axios.post(
       `${this.vllmUrl}/v1/chat/completions`,

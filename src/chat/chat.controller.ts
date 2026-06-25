@@ -55,6 +55,22 @@ export class ChatController {
     return this.chat.analizarEms(body)
   }
 
+  @Post('transcribir')
+  transcribir(@Body() body: { audioBase64: string; mimeType?: string }) {
+    return this.chat.transcribir(body)
+  }
+
+  @Post('voz')
+  async voz(@Body() body: { texto: string }, @Res() res: Response) {
+    try {
+      const audio = await this.chat.tts(body?.texto ?? '')
+      res.setHeader('Content-Type', 'audio/mpeg')
+      res.send(audio)
+    } catch {
+      res.status(500).json({ error: 'No se pudo generar la voz' })
+    }
+  }
+
   @Put(':proyectoId/cronograma')
   async saveCronograma(@Param('proyectoId') proyectoId: string, @Body() body: any) {
     await this.chat.guardarCronograma(proyectoId, body)
