@@ -20,6 +20,8 @@ import { KnowledgeBaseService } from '../knowledge-base/knowledge-base.service'
 import { AnalisisService } from '../analisis/analisis.service'
 import { ProyectosService } from '../proyectos/proyectos.service'
 import { FasesDetalleService } from '../fases-detalle/fases-detalle.service'
+import { RegistrosFaseService } from '../registros-fase/registros-fase.service'
+import { DocumentosRequeridosService } from '../documentos-requeridos/documentos-requeridos.service'
 import { RNE_CONTEXTO } from './rne-contexto'
 import { COSTOS_REVISTA } from './costos-revista'
 import { GRUAS_FICHAS_TECNICAS } from './gruas-fichas'
@@ -115,12 +117,83 @@ PASO C5 — CIERRE: Si no hay incidencias bloqueantes (o el usuario las resolvi�
 MODO D — GENERACIÓN DEL PROYECTO (reglas)
 ════════════════════════════════════════════
 
+- generar_proyecto es para LLENAR EL EXPEDIENTE COMPLETO de las 5 fases (secciones del módulo + registros). Para armar el PIPELINE OPERATIVO de UNA fase (etapas con nombre + actividades + documentos), usa crear_etapas (MODO E) — NO uses generar_proyecto para eso.
+- NUNCA generes sin proponer y confirmar antes: si el usuario dice "genera las etapas/el proyecto", primero RESUME en texto qué vas a crear y pregúntale "¿lo creo así o quieres ajustar algo?". Solo llama a la tool cuando confirme.
 - SOLO llama a generar_proyecto cuando el usuario confirme explícitamente (responde "sí", "dale", "genera", "comienza" a tu pregunta de cierre).
 - Antes de llamar, asegúrate de tener un análisis ejecutado (analisis_completo) — si no lo hay, ejecútalo primero con los datos disponibles.
 - VALIDACIÓN DE CIFRAS: usa EXACTAMENTE los números del último analisis_completo (pisos, sótanos, departamentos, áreas, costos). NO uses cifras anteriores de la conversación que ya fueron corregidas/ajustadas.
 - Incluye la fase demolicion SOLO si hay construcción existente que demoler.
 - En equipos: incluye la grúa torre recomendada (con su modelo y costo en soles), y maquinaria justificada (excavadora si hay sótanos, bomba de concreto si pisos > 8, etc.).
 - Después de la tool, resume al usuario qué se generó en cada módulo y dile que puede verlo en las pestañas de fases del proyecto.
+
+MODO E — ETAPAS DE OBRA (pipeline por fase, vía crear_etapas) — FLUJO PRINCIPAL
+════════════════════════════════════════════
+Es LA forma de armar el plan operativo de una fase (sobre todo demolición). Sigue SIEMPRE estos 3 pasos, sin saltarte el 2:
+
+  PASO 1 — ANALIZA Y PROPÓN: cuando el ingeniero pida armar/generar las etapas o "el proyecto" de una fase, analiza su caso real y PROPÓN EN TEXTO el pipeline a su medida: cada etapa con un NOMBRE PROPIO y claro (NO "etapa 1/2/3"), su descripción, sus 2-6 actividades concretas, y el checklist de documentos si aplica.
+  PASO 2 — PREGUNTA Y ESPERA: termina SIEMPRE preguntando "¿Lo creo así, o quieres ajustar algo — nombres de etapas, agregar/quitar etapas, actividades o documentos?". NUNCA llames a crear_etapas sin que el ingeniero confirme. Si pide cambios, ajusta tu propuesta y vuelve a confirmar.
+  PASO 3 — CREA: solo cuando confirme, llama a crear_etapas. OBLIGATORIO: cada etapa con NOMBRE PROPIO + su array "actividades" (las MISMAS sub-tareas que propusiste, nunca etapas vacías) + "documentos_requeridos" si aplica.
+
+- Tras crear, confírmale y RECOMIÉNDALE proactivamente el siguiente paso (ej: "¿armo también el plan de seguridad de la demolición? ¿o seguimos con la siguiente fase?").
+- PUEDES cambiar el estado de actividades existentes con actualizar_actividades (filtrando por etapa o por nombres); el avance se recalcula solo. NO le digas que lo haga manual: hazlo tú. PERO antes: identifica bien la FASE y la ETAPA. Si sabes la fase por el contexto de pantalla y no hay ambigüedad, hazlo directo. Si el nombre puede existir en varias fases/etapas o no estás seguro, PREGUNTA primero "¿te refieres a [etapa] de [fase]?" y actúa al confirmar. Siempre dile sobre qué fase/etapa actuaste.
+- Las fases arrancan SIN etapas. Las etapas tienen NOMBRE PROPIO; jamás uses nombres genéricos tipo "etapa 1".
+- Referencia de demolición en Lima (RNE G.050): Gestión y permisos · Trabajos preliminares · Desmontaje selectivo · Demolición estructural · Eliminación de desmonte · Limpieza y entrega. Adáptala al proyecto, no la copies ciega.
+- Para UNA fase usa crear_etapas. Solo usa generar_proyecto si el ingeniero pide llenar el EXPEDIENTE de TODAS las fases a la vez (y también proponiendo y confirmando antes).
+
+MODO F — REVISIÓN Y VINCULACIÓN DE DOCUMENTOS (archivos que sube el ingeniero)
+════════════════════════════════════════════
+- El ingeniero puede ADJUNTAR archivos por el chat (con el clip 📎). Formatos aceptados: PDF, JPG, PNG. Si pregunta cómo enviártelos, dile eso.
+- Cuando adjunte un archivo: LÉELO (ves el texto del PDF o la imagen) e identifica QUÉ documento es (ej: "este parece el Certificado de no ser Patrimonio Cultural del Ministerio de Cultura").
+- Llama a consultar_documentos_requeridos para ver el checklist real del proyecto y a qué documento del listado corresponde. Si calza, dile al usuario: "Veo que este es [documento]. ¿Lo agrego como entregado al checklist de [fase]?".
+- SOLO si el usuario confirma ("sí", "agrégalo"), llama a completar_documento_requerido(fase, nombre EXACTO). Eso marca el documento como ENTREGADO y lo vincula al archivo. Confírmaselo.
+- Si el archivo NO corresponde a ningún documento del checklist, dilo y ofrece agregarlo como documento nuevo (vía crear_etapas con documentos_requeridos) si tiene sentido.
+- Lee SIEMPRE el contexto real de ESTE proyecto (sus etapas y documentos) antes de actuar: cada obra es distinta.
+
+PLANOS DXF (AutoCAD/ZWCAD): cuando el ingeniero adjunte un plano .dxf, recibirás los datos extraídos del CAD (capas, TEXTOS/leyendas, bloques, dimensiones). INTERPRÉTALOS como un ingeniero leyendo el plano:
+- Resume qué ves: n° de pisos y sótanos (dedúcelos de leyendas tipo "SOTANO 1/2", "PISO 5", "AZOTEA", niveles N.P.T.), departamentos, estacionamientos (bloques/textos), cuadro de áreas, ejes, leyenda.
+- Da recomendaciones concretas y OFRECE crear registros con lo que dedujiste, pidiendo confirmar. Ej: "Tu plano muestra 4 sótanos → ¿te armo las calzaduras con 4 anillos? / el movimiento de tierras de los 4 sótanos? / los vaciados por piso?" y al aceptar usa crear_calzaduras / crear_movimiento_tierras / crear_vaciados / crear_etapas.
+- Sé honesto: del DXF salen textos/capas/bloques/medidas, no la geometría interpretada como un humano. Si algo no está en los textos, dilo y pídelo.
+
+MODO G — SEGURIDAD (SSOMA / RNE G.050)
+════════════════════════════════════════════
+- La demolición es de ALTO RIESGO: la seguridad es lo primero (RNE G.050). Cuando el ingeniero hable de seguridad, o al armar una demolición, OFRÉCELE crear el plan de seguridad.
+- Adáptalo al caso real: casona de adobe → riesgo de colapso descontrolado, polvo (sílice), afectación de medianeros, posible asbesto. Edificio alto → caída de altura, caída de material a vía pública.
+- Si acepta, llama a crear_seguridad(fase, checklist[], riesgos[]): el checklist con medidas concretas (malla anti-polvo, apuntalamiento de medianeros, riego, demolición de arriba hacia abajo, EPP, charlas, supervisor CIP…) marcando critico=true las indispensables; y riesgos[] con los riesgos clave.
+- El usuario lo ve en la pestaña Seguridad, marca el cumplimiento y reporta incidentes. Tras crearlo, resume los 2-3 riesgos más críticos.
+
+MODO H — COLINDANTES / VECINOS (clave legal en demolición)
+════════════════════════════════════════════
+- En demolición/excavación, demoler sin documentar el estado de los predios vecinos ANTES = reclamos/juicios por daños (rajaduras). Es el riesgo legal #1.
+- Cuando el ingeniero mencione a sus vecinos/colindantes, o al armar una demolición entre medianeras, RECOMIÉNDALE registrar los colindantes y documentar su estado ANTES (fotos + acta de constatación, idealmente notarial).
+- Si acepta, llama a crear_colindantes con los vecinos que mencione (nombre/posición, ubicación, estado previo si lo sabe). Avísale que en la pestaña Colindantes sube las fotos ANTES y DESPUÉS, marca el acta firmada y registra cualquier reclamo.
+- Si te lo pide, redacta el texto del acta de constatación tipo. Recálcale: la foto/acta ANTES es la que lo protege legalmente.
+
+MODO I — CALZADURAS (excavación entre medianeras)
+════════════════════════════════════════════
+- En excavación urbana en Lima se excava entre vecinos: primero hay que CALZAR las cimentaciones de los predios colindantes (RNE E.050) para que no se asienten/colapsen.
+- Cuando el ingeniero hable de su excavación (sótanos, vecinos, profundidad), PROPÓN las calzaduras por sector/lindero: una por cada lindero con vecino, con profundidad (≈ n° sótanos × ~3.0 m), n° de paños (según longitud del lindero) y n° de anillos (≈ profundidad / 1.0–1.5 m).
+- Pregunta y, SOLO si acepta, llama a crear_calzaduras. Explícale lo crítico: ejecutar por PAÑOS ALTERNADOS en ANILLOS DESCENDENTES (nunca corrido), controlar VERTICALIDAD y monitorear el ASENTAMIENTO del vecino.
+- El usuario controla el avance (paños/anillos) y la verticalidad en la pestaña Calzaduras.
+
+MODO J — MOVIMIENTO DE TIERRAS (excavación)
+════════════════════════════════════════════
+- Excavar = mover tierra y eliminarla a botadero/relleno autorizado (EO-RS, MINAM). Cuando el ingeniero hable de su excavación (sótanos, profundidad), puedes OFRECER armar el movimiento de tierras.
+- Estima el volumen por sótano desde la cabida: área de planta libre × ~3.0 m de altura por sótano. Los viajes de volquete se calculan con esponjamiento (~1.25) y capacidad (~15 m³).
+- Si acepta, llama a crear_movimiento_tierras con los sótanos (nombre + volumenProyectado) y el botadero. El usuario registra luego el volumen excavado real y los viajes.
+
+MODO K — CONTROL DE CONCRETO / VACIADOS (construcción)
+════════════════════════════════════════════
+- El casco se controla por su concreto. Cuando el ingeniero hable de la construcción/estructura, puedes OFRECER armar el plan de vaciados.
+- Estima los vaciados desde la cabida: platea/cimentación, columnas y placas por piso, y una losa por piso (n° losas = n° pisos), con su f'c (210 típico en losas/cimentación) y volumen aproximado (área × espesor).
+- Si acepta, llama a crear_vaciados. El usuario registra después las PROBETAS rotas a 7/14/28 días; la app marca en rojo si la resistencia a 28 días queda por debajo del f'c y grafica la curva de resistencia.
+- Recálcale lo crítico: tomar probetas por vaciado, controlar el slump en obra, y curar el concreto.
+
+MODO M — PRODUCTIVIDAD DE MANO DE OBRA (rendimiento de cuadrillas)
+════════════════════════════════════════════
+- Disponible en demolición, excavación, construcción y acabados. Mide el RENDIMIENTO real de las cuadrillas vs lo presupuestado (avance ÷ horas-hombre).
+- Cuando el usuario hable de cuadrillas, rendimiento, productividad o avance de mano de obra, OFRECE armar las partidas de productividad.
+- Estima por partida: metrado total (del proyecto) y HH presupuestadas usando rendimientos típicos de Lima (ej: vaciado de losa ~2 m²/HH, tarrajeo ~1.5 m²/HH, excavación con maquinaria ~5 m³/HH, demolición manual ~1.2 m²/HH). Si acepta, llama a crear_productividad.
+- El usuario registra metrado ejecutado y HH reales; la app calcula el rendimiento y alerta si cae bajo 85%. Si te preguntan por un rendimiento bajo, recomienda revisar cuadrilla, método, frente de trabajo o programación.
 
 CADA FASE LLEVA "detalle.secciones" OBLIGATORIO — así se conforma cada módulo profesionalmente.
 Todos los valores salen de la data REAL del proyecto (análisis, normativa, documentos, conversación):
@@ -155,6 +228,103 @@ Todos los valores salen de la data REAL del proyecto (análisis, normativa, docu
   2. "Plan de ventas" (kv): nº unidades, velocidad de ventas (deptos/mes), preventa mínima para banco (30%), precio promedio por depto
   3. "Seguros y contratos" (lista): póliza CAR, contratos con subcontratistas, contratos de compraventa, garantías post-venta
   4. "Control financiero" (kv): presupuesto total, capital propio %, línea bancaria, punto de equilibrio (nº deptos)
+
+CADA FASE LLEVA TAMBIÉN "registros" OBLIGATORIO — las actividades del PIPELINE DE ETAPAS de la fase.
+CADA registro lleva datos.etapa con la clave EXACTA de su etapa. Esquemas por fase:
+
+▸ demolicion — etapas: gestion | preliminares | desmontaje | demolicion | eliminacion | limpieza. estado inicial: "Planificada"
+  ⚠️ REGLA CRÍTICA 1: cada registro DEBE llevar datos.etapa con la KEY EXACTA de su etapa
+  (una de: gestion, preliminares, desmontaje, demolicion, eliminacion, limpieza). NO uses el nombre
+  ("Gestión y permisos" está MAL; "gestion" está bien). Sin la key correcta la actividad se ubica mal.
+  ⚠️ REGLA CRÍTICA 2: genera actividades en LAS 6 ETAPAS. NINGUNA etapa puede quedar vacía.
+  Genera entre 12 y 16 registros en total (≈2-3 por etapa). Esta es la fase de mayor detalle.
+  Calcula con el área de demolición real: volumenDesmonteM3 = área × 0.8; viajesVolquete = ceil(volumen / 15).
+  Reparte el costo total de demolición del análisis (en SOLES, ≈ costo_demolicion_usd × 3.8) entre las
+  actividades — la suma de costoEstimadoSoles debe acercarse a ese total. Cifras abajo son orientativas:
+  ajústalas a la escala real del proyecto.
+
+  Lista de actividades a generar (cada bullet = 1 registro; nombre + datos):
+  • gestion:
+    - "Certificado de no ser Patrimonio Cultural" (entidad: Ministerio de Cultura, duracionDias 20) — INCLUIR siempre que la edificación sea antigua; en observaciones: "Bloqueante: sin esto no se puede demoler en Lima".
+    - "Licencia de demolición (FUE)" (Municipalidad de [distrito], duracionDias 15)
+    - "Informe de ingeniero civil colegiado de seguridad" (Profesional CIP, duracionDias 7)
+    - "Póliza CAR + responsabilidad civil a colindantes" (Aseguradora, duracionDias 5)
+    - "Contrato con EO-RS para gestión de residuos" (EO-RS registrada en MINAM, duracionDias 5)
+  • preliminares:
+    - "Desconexión de servicios (agua, luz, desagüe, gas)" (entidad: Sedapal/Enel/Cálidda, duracionDias 3)
+    - "Instalación de cerco perimetral y mallas anti-polvo" (duracionDias 2)
+    - "Protección y apuntalamiento de medianeros" (duracionDias 3) — incluir si hay colindantes
+    - "Retiro de asbesto y materiales peligrosos" (duracionDias 4) — incluir si la edificación es antigua; cita riesgo
+  • desmontaje:
+    - "Desmontaje de carpintería y materiales reaprovechables" (metodo "Desmontaje manual", duracionDias 3)
+    - "Retiro de instalaciones, sanitarios y coberturas" (duracionDias 2)
+  • demolicion:
+    - "Demolición estructural de [tipoEstructura] ([área] m²)" con tipoEstructura, areaM2, volumenDesmonteM3,
+      metodo ("Mecánica"|"Mixta"), duracionDias, observaciones citando "RNE G.050: demolición de arriba hacia abajo"
+    - "Demolición de cimientos y elementos enterrados" (duracionDias 3)
+  • eliminacion:
+    - "Carguío y eliminación de desmonte (N viajes de volquete 15 m³)" con viajesVolquete, botadero
+      ("Escombrera autorizada / cantera EO-RS"), costoEstimadoSoles (el grueso del costo), duracionDias
+  • limpieza:
+    - "Limpieza final y nivelación del terreno" (duracionDias 2) — observaciones: "Terreno listo para excavación"
+
+  datos por registro: { etapa, tipoEstructura ("Albañilería"|"Concreto armado"|"Adobe"|"Madera"|"Mixta"),
+  areaM2, volumenDesmonteM3, viajesVolquete, metodo ("Manual"|"Mecánica"|"Mixta"|"Desmontaje manual"),
+  entidad, botadero, costoEstimadoSoles, fechaInicio (""), duracionDias, responsable (""),
+  supervisorSsoma (""), observaciones }
+  (llena SOLO los campos que apliquen a cada actividad; deja los demás fuera)
+
+▸ excavacion — etapas: trazo | calzaduras | excavacion_masiva | perfilado. estado inicial: "Planificada"
+  Genera: trazo (1 actividad), calzaduras (1 anillo por cada ~2.5m de profundidad:
+  "Anillo 1 (0 a -2.5m)"...), excavacion_masiva (1 por sótano con su volumen),
+  perfilado (1 actividad de fondo de cimentación).
+  datos: { etapa, areaM2, profundidadM, volumenM3, viajesVolquete (volumen÷15),
+  clasificacionTerreno (si se conoce), metodo ("Excavadora Hidráulica"|"Retroexcavadora"|"Manual"|"Mixto"),
+  nivelFreatico (si se conoce), duracionDias, responsable (""), observaciones }
+
+▸ construccion — etapas: cimentacion | estructura | albanileria | azotea. estado inicial: "Programado"
+  Genera: cimentacion (platea + 1 muro por sótano), estructura (1 registro por losa/piso:
+  "Losa piso 1"..."Losa piso N" con su volumen de concreto), albanileria (tabiquería por
+  grupos de pisos, ej. "Tabiquería pisos 1-4"), azotea (tanque elevado y azotea).
+  datos: { etapa, elemento ("Platea"|"Zapatas"|"Muro sótano"|"Columnas y placas"|"Vigas"|"Losa"|"Escalera"|"Cisterna"|"Tabiquería"|"Tanque elevado"),
+  piso (0=sótano/platea), volumenM3 (concreto total repartido por elemento), fc ("210"),
+  probetas (4 por vaciado), proveedor (""), cuadrilla (""), fechaProgramada (""), observaciones }
+
+▸ acabados → SIN etapa (el pipeline se calcula del avance de las unidades). estado inicial: "En acabados"
+  1 registro por DEPARTAMENTO (si son ≤30; si son más, 1 por piso: "Deptos piso N").
+  Numera por piso: piso 1 → 101, 102...; respeta deptos/piso y la mezcla de tipologías del análisis.
+  datos: { piso, tipologia ("studio"|"1 dorm"|"2 dorm"|"3 dorm"), areaM2 (área promedio),
+  avanceTabiqueria (0), avanceInstalaciones (0), avanceCarpinteria (0), avancePintura (0),
+  estadoVenta ("Disponible"), observaciones }
+
+▸ administracion — etapas: preobra | ejecucion | cierre. estado inicial: "Por iniciar"
+  Genera por etapa: preobra (licencia de demolición si aplica, licencia de edificación, póliza CAR),
+  ejecucion (valorizaciones mensuales, control de preventa), cierre (conformidad de obra,
+  declaratoria de fábrica, independización, entrega de unidades).
+  datos: { etapa, entidad ("Municipalidad de [distrito]"|"SUNARP"|"Aseguradora"|"Notaría"|"Interno"),
+  numeroExpediente (""), fechaIngreso (""), plazoDias (estimado real),
+  costoEstimadoSoles (estimado real), responsable (""), observaciones }
+
+DOCUMENTOS REQUERIDOS ("documentos_requeridos") — checklist de papeles/permisos que el cliente debe
+conseguir/subir, ADAPTADO AL CASO (distrito, antigüedad de la edificación, sótanos, uso).
+OBLIGATORIO para demolicion y administracion; opcional en las demás (pon [] si no aplica).
+
+▸ demolicion — genera SIEMPRE estos (ajusta entidad al distrito real del proyecto):
+  - "Certificado de no ser Patrimonio Cultural" (Ministerio de Cultura) — obligatorio SOLO si hay
+    edificación existente y es/parece antigua. Si la casona es antigua, márcalo obligatorio y
+    adviértelo: sin esto NO se puede demoler en Lima.
+  - "Licencia de demolición (FUE)" (Municipalidad de [distrito]) — obligatorio.
+  - "Informe de ingeniero civil colegiado (condiciones de seguridad)" (Profesional CIP) — obligatorio.
+  - "Póliza CAR + responsabilidad civil a colindantes" (Aseguradora) — obligatorio.
+  - "Contrato con EO-RS para residuos" (Empresa registrada en MINAM) — obligatorio.
+  - "Informe de presencia de asbesto" (Laboratorio) — obligatorio SOLO si la edificación es antigua.
+  Cada uno con descripcion breve (para qué sirve) y entidad real.
+
+▸ administracion — los trámites principales como documentos requeridos: licencia de edificación,
+  conformidad de obra, declaratoria de fábrica, independización, FUE.
+
+REGLA: si tienes documentos de la KB o internet sobre estos requisitos, cítalos. Las cantidades y
+exigencias deben ser reales para Lima/Perú (Ley 29090, RNE G.050, D.S. 002-2022-VIVIENDA).
 
 ════════════════════════════════════════════
 FLUJO DE ENTREVISTA GUIADA (Modo B)
@@ -653,8 +823,38 @@ const C4_TOOLS: LlmTool[] = [
                   },
                   required: ['secciones'],
                 },
+                registros: {
+                  type: 'array',
+                  description: 'Registros operativos de la fase (OBLIGATORIO, ver especificación por fase en el system prompt). Son las filas con las que el ingeniero gestiona la obra: demoliciones, vaciados por elemento, unidades de acabados, trámites. SOBRESCRIBE los existentes.',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      nombre: { type: 'string', description: 'Código/nombre del registro. Ej: "DEM-001 Casona principal", "Losa piso 3", "Depto 501", "Licencia de edificación"' },
+                      estado: { type: 'string', description: 'Estado inicial según la fase (ver prompt). Ej: "Planificada", "Programado", "En acabados", "Por iniciar"' },
+                      datos: {
+                        type: 'object',
+                        description: 'Campos específicos del registro según el esquema de la fase definido en el system prompt. Valores REALES del proyecto.',
+                      },
+                    },
+                    required: ['nombre', 'estado', 'datos'],
+                  },
+                },
+                documentos_requeridos: {
+                  type: 'array',
+                  description: 'Checklist de documentos/permisos que el proyecto necesita para esta fase, según el caso (distrito, patrimonio, sótanos). Especialmente importante en demolicion y administracion. El usuario los irá subiendo. Ver especificación en el system prompt.',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      nombre: { type: 'string', description: 'Ej: "Certificado de no ser Patrimonio Cultural", "Licencia de demolición (FUE)", "Póliza CAR"' },
+                      descripcion: { type: 'string', description: 'Para qué sirve y cuándo se necesita, en 1 frase.' },
+                      entidad: { type: 'string', description: 'Quién lo emite/exige. Ej: "Ministerio de Cultura", "Municipalidad de [distrito]", "Aseguradora", "MINAM/EO-RS"' },
+                      obligatorio: { type: 'boolean', description: 'true si es obligatorio para iniciar; false si es condicional/recomendado.' },
+                    },
+                    required: ['nombre', 'entidad', 'obligatorio'],
+                  },
+                },
               },
-              required: ['fase', 'tareas', 'detalle'],
+              required: ['fase', 'tareas', 'detalle', 'registros'],
             },
           },
           equipos: {
@@ -676,7 +876,337 @@ const C4_TOOLS: LlmTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'crear_etapas',
+      description:
+        'Arma el pipeline de una fase del proyecto: crea las ETAPAS (sub-fases reales), SUS ACTIVIDADES (sub-tareas) dentro de cada etapa, y opcionalmente el CHECKLIST DE DOCUMENTOS requeridos. Úsala cuando, conversando con el ingeniero, entiendas su caso y le propongas un pipeline (ej: demolición de casona de adobe → Gestión y permisos, Preliminares, Desmontaje, Demolición estructural, Eliminación, Limpieza). Llama a esta tool SOLO cuando el usuario ACEPTE. IMPORTANTE: incluye SIEMPRE las actividades concretas de cada etapa (las sub-tareas que mencionaste en tu propuesta) — el usuario podrá editarlas, completarlas o borrarlas después. Por defecto AÑADE a lo existente; usa reemplazar=true solo si el usuario quiere rehacer el pipeline desde cero.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fase: {
+            type: 'string',
+            description: 'Slug de la fase: demolicion | excavacion | construccion | acabados | administracion',
+          },
+          etapas: {
+            type: 'array',
+            description: 'Etapas en orden de ejecución, adaptadas al caso real del proyecto (no genéricas). Entre 3 y 8 normalmente.',
+            items: {
+              type: 'object',
+              properties: {
+                nombre: { type: 'string', description: 'Nombre de la etapa. Ej: "Gestión y permisos", "Demolición estructural"' },
+                descripcion: { type: 'string', description: 'Qué abarca la etapa en 1 frase, con referencia normativa si aplica (ej: RNE G.050).' },
+                actividades: {
+                  type: 'array',
+                  description: 'Sub-tareas concretas de ESTA etapa, en orden (2 a 6). Son las acciones reales del ingeniero. Ej para "Gestión y permisos": "Tramitar certificado de no Patrimonio (Min. Cultura)", "Obtener licencia de demolición FUE (Municipalidad de Barranco)".',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      nombre: { type: 'string', description: 'Descripción de la actividad/sub-tarea.' },
+                      estado: { type: 'string', description: 'Estado inicial (normalmente el inicial de la fase, ej: "Planificada"). Opcional.' },
+                    },
+                    required: ['nombre'],
+                  },
+                },
+              },
+              required: ['nombre', 'actividades'],
+            },
+          },
+          documentos_requeridos: {
+            type: 'array',
+            description: 'Opcional. Checklist de permisos/certificados que la fase necesita según el caso (distrito, patrimonio). Muy útil en demolición y administración. El usuario los irá subiendo.',
+            items: {
+              type: 'object',
+              properties: {
+                nombre: { type: 'string', description: 'Ej: "Certificado de no ser Patrimonio Cultural", "Licencia de demolición (FUE)"' },
+                descripcion: { type: 'string', description: 'Para qué sirve / cuándo se necesita, en 1 frase.' },
+                entidad: { type: 'string', description: 'Quién lo emite. Ej: "Ministerio de Cultura", "Municipalidad de Barranco", "Aseguradora", "MINAM/EO-RS"' },
+                obligatorio: { type: 'boolean', description: 'true si es obligatorio para iniciar.' },
+              },
+              required: ['nombre', 'entidad'],
+            },
+          },
+          reemplazar: {
+            type: 'boolean',
+            description: 'true para reemplazar todas las etapas y actividades existentes de la fase; false (default) para añadir.',
+          },
+        },
+        required: ['fase', 'etapas'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'consultar_documentos_requeridos',
+      description: 'Lee el checklist de documentos requeridos del proyecto (qué documentos pide cada fase y su estado: pendiente/entregado). Úsala ANTES de vincular un archivo que el usuario subió, para conocer los nombres exactos y saber a qué documento corresponde. Si no pasas fase, devuelve los de todas.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fase: { type: 'string', description: 'Opcional. Slug de la fase: demolicion | excavacion | construccion | acabados | administracion' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'completar_documento_requerido',
+      description: 'Marca un documento requerido del proyecto como ENTREGADO y lo vincula al ÚLTIMO archivo que el usuario subió por el chat. Llama a esta tool SOLO cuando el usuario CONFIRME que el archivo que envió corresponde a ese documento del checklist. Primero usa consultar_documentos_requeridos para conocer el nombre exacto.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fase: { type: 'string', description: 'Slug de la fase del documento: demolicion | excavacion | construccion | acabados | administracion' },
+          nombre: { type: 'string', description: 'Nombre EXACTO del documento del checklist a marcar como entregado. Ej: "Certificado de no ser Patrimonio Cultural"' },
+        },
+        required: ['fase', 'nombre'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'crear_seguridad',
+      description: 'Arma el plan de seguridad (SSOMA / RNE G.050) de una fase: un checklist de medidas de seguridad y los riesgos identificados, adaptados al caso real de la obra. Úsala en demolición sobre todo (alto riesgo). Llama SOLO cuando el usuario acepte que lo crees. Por defecto AÑADE a lo existente.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fase: { type: 'string', description: 'Slug de la fase: demolicion | excavacion | construccion | acabados | administracion' },
+          checklist: {
+            type: 'array',
+            description: 'Medidas de seguridad concretas adaptadas al caso (RNE G.050). Ej demolición adobe: malla anti-polvo, apuntalamiento de medianeros, control de polvo con riego, demolición de arriba hacia abajo, retiro de asbesto si aplica.',
+            items: {
+              type: 'object',
+              properties: {
+                item: { type: 'string', description: 'Medida de seguridad.' },
+                critico: { type: 'boolean', description: 'true si es crítica para la seguridad.' },
+              },
+              required: ['item'],
+            },
+          },
+          riesgos: {
+            type: 'array',
+            description: 'Riesgos clave identificados para esta obra (texto corto). Ej: "Colapso descontrolado de muros de adobe", "Polvo (sílice)", "Afectación de medianeros", "Presencia de asbesto".',
+            items: { type: 'string' },
+          },
+          incidentes: {
+            type: 'array',
+            description: 'Opcional. Incidentes/observaciones ya conocidos a registrar.',
+            items: {
+              type: 'object',
+              properties: {
+                descripcion: { type: 'string' },
+                severidad: { type: 'string', enum: ['baja', 'media', 'alta'] },
+              },
+              required: ['descripcion'],
+            },
+          },
+          reemplazar: { type: 'boolean', description: 'true para rehacer el checklist desde cero; false (default) para añadir.' },
+        },
+        required: ['fase'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'crear_colindantes',
+      description: 'Registra los predios COLINDANTES (vecinos) del proyecto. Úsala en demolición/excavación cuando el ingeniero mencione a sus vecinos o quieras documentar el estado de los predios vecinos ANTES de demoler (clave para evitar reclamos por daños). Llama SOLO cuando el ingeniero acepte. Las fotos (antes/después) y el acta las sube/marca él después. Por defecto AÑADE.',
+      parameters: {
+        type: 'object',
+        properties: {
+          colindantes: {
+            type: 'array',
+            description: 'Predios vecinos colindantes con el terreno.',
+            items: {
+              type: 'object',
+              properties: {
+                nombre: { type: 'string', description: 'Nombre/referencia. Ej: "Vecino izquierda — Sr. Pérez", "Predio del fondo"' },
+                ubicacion: { type: 'string', description: 'Dirección o posición relativa. Ej: "Jr. Unión 123 (lado izquierdo)"' },
+                estadoPrevio: { type: 'string', enum: ['sin_revisar', 'sin_observaciones', 'con_observaciones'], description: 'Estado previo conocido del predio.' },
+                observaciones: { type: 'string', description: 'Rajaduras previas, estructuras sensibles, acuerdos con el vecino...' },
+              },
+              required: ['nombre'],
+            },
+          },
+        },
+        required: ['colindantes'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'crear_calzaduras',
+      description: 'Arma las CALZADURAS (sostenimiento de las cimentaciones de los vecinos) de la excavación. Úsala en excavación entre medianeras: propón las calzaduras por sector/lindero según los vecinos y la profundidad de sótanos, y llama SOLO cuando el ingeniero acepte. El avance por paños/anillos y la verticalidad los lleva él después. Por defecto AÑADE.',
+      parameters: {
+        type: 'object',
+        properties: {
+          calzaduras: {
+            type: 'array',
+            description: 'Calzaduras por sector/lindero (RNE E.050). Normalmente una por cada lindero con vecino.',
+            items: {
+              type: 'object',
+              properties: {
+                sector: { type: 'string', description: 'Ej: "Sector A — lindero izquierdo (vecino Pérez)"' },
+                ubicacion: { type: 'string', description: 'Posición/lindero y vecino.' },
+                profundidadM: { type: 'number', description: 'Profundidad de calzadura en metros (≈ profundidad de excavación hasta cimentación, ej. n° sótanos × ~3.0 m).' },
+                numPanos: { type: 'number', description: 'N° de paños (paneles alternados) estimados según la longitud del lindero.' },
+                numAnillos: { type: 'number', description: 'N° de anillos descendentes (≈ profundidad / 1.0–1.5 m por anillo).' },
+                dimensiones: { type: 'string', description: 'Dimensiones del paño. Ej: "0.60 × 1.50 m"' },
+                concreto: { type: 'string', description: 'Tipo de concreto. Ej: "Ciclópeo f\'c=100 + 30% PM"' },
+                observaciones: { type: 'string', description: 'Secuencia alternada, control topográfico, riesgos del vecino...' },
+              },
+              required: ['sector'],
+            },
+          },
+        },
+        required: ['calzaduras'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'crear_movimiento_tierras',
+      description: 'Arma el movimiento de tierras de la excavación: los frentes/sótanos con su volumen proyectado (m³) y el botadero. Estima el volumen desde la cabida (planta libre × profundidad por sótano ≈ 3 m). Úsala en excavación; llama SOLO cuando el ingeniero acepte. El volumen excavado real lo registra él. Por defecto AÑADE.',
+      parameters: {
+        type: 'object',
+        properties: {
+          sotanos: {
+            type: 'array',
+            description: 'Frentes/sótanos a excavar con su volumen proyectado.',
+            items: {
+              type: 'object',
+              properties: {
+                nombre: { type: 'string', description: 'Ej: "Sótano 1", "Sótano 2", "Cisterna"' },
+                volumenProyectado: { type: 'number', description: 'Volumen a excavar en m³ (≈ área de planta × ~3.0 m de altura del sótano).' },
+              },
+              required: ['nombre'],
+            },
+          },
+          botadero: { type: 'string', description: 'Botadero/relleno autorizado. Ej: "EO-RS autorizada (MINAM)"' },
+          capacidadVolquete: { type: 'number', description: 'm³ por volquete (default 15).' },
+          esponjamiento: { type: 'number', description: 'Factor de esponjamiento del material (default 1.25).' },
+        },
+        required: ['sotanos'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'crear_vaciados',
+      description: 'Arma el plan de vaciados de concreto del casco (construcción): los elementos a vaciar con su f\'c y volumen. Estima desde la cabida (ej: una losa por piso, columnas/placas por piso, platea/cimentación). Úsala en construcción; llama SOLO cuando el ingeniero acepte. Las probetas (7/14/28 días) las registra él después. Por defecto AÑADE.',
+      parameters: {
+        type: 'object',
+        properties: {
+          vaciados: {
+            type: 'array',
+            description: 'Vaciados de concreto del casco, en orden de ejecución.',
+            items: {
+              type: 'object',
+              properties: {
+                elemento: { type: 'string', description: 'Ej: "Platea de cimentación", "Columnas y placas", "Losa"' },
+                piso: { type: 'string', description: 'Piso/nivel. Ej: "1", "2"... ("" para cimentación)' },
+                volumenM3: { type: 'number', description: 'Volumen de concreto en m³.' },
+                fcDiseno: { type: 'number', description: "f'c de diseño en kg/cm² (210, 280, 350...). Cimentación/losas típicamente 210; placas según diseño." },
+                slump: { type: 'string', description: 'Slump de diseño. Ej: \'3"-4"\'' },
+                proveedor: { type: 'string', description: 'Proveedor de concreto premezclado. Ej: "UNICON"' },
+              },
+              required: ['elemento'],
+            },
+          },
+        },
+        required: ['vaciados'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'actualizar_actividades',
+      description: 'Cambia el ESTADO de actividades ya existentes de una fase (ej: marcarlas como completadas/en progreso). Úsala cuando el usuario pida "marca X como completado", "da por terminada la etapa Y", etc. Puedes filtrar por etapa (todas sus actividades) o por nombres específicos. Al actualizar, el avance de la etapa se recalcula solo.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fase: { type: 'string', description: 'Slug: demolicion | excavacion | construccion | acabados | administracion' },
+          estado: { type: 'string', description: 'Estado a aplicar. Ej: "completada", "en progreso". Se normaliza al estado válido de la fase.' },
+          etapa: { type: 'string', description: 'Opcional. Nombre o key de la etapa cuyas actividades actualizar (ej: "Trabajos Preliminares"). Aplica a TODAS las actividades de esa etapa.' },
+          nombres: { type: 'array', items: { type: 'string' }, description: 'Opcional. Nombres (o parte) de actividades específicas a actualizar.' },
+        },
+        required: ['fase', 'estado'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'crear_productividad',
+      description: 'Arma las partidas de PRODUCTIVIDAD DE MANO DE OBRA de una fase (control de rendimiento de cuadrillas). Por cada partida defines metrado total y HH (horas-hombre) presupuestadas; el usuario luego registra metrado ejecutado y HH reales, y la app calcula el rendimiento real vs previsto y alerta si baja. Estima las HH desde el metrado y rendimientos típicos de Lima. Llama SOLO cuando el usuario acepte. Por defecto AÑADE.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fase: { type: 'string', description: 'Slug: demolicion | excavacion | construccion | acabados' },
+          partidas: {
+            type: 'array',
+            description: 'Partidas de mano de obra con su metrado y HH presupuestadas. Ej: "Vaciado de losas" 700 m2 / 350 HH; "Excavación masiva" 1180 m3 / 240 HH; "Demolición estructural" 350 m2 / 280 HH.',
+            items: {
+              type: 'object',
+              properties: {
+                nombre: { type: 'string', description: 'Partida. Ej: "Vaciado de losas", "Tarrajeo de muros"' },
+                unidad: { type: 'string', description: 'Unidad de metrado: m2 | m3 | und | ml | kg | ton' },
+                metradoTotal: { type: 'number', description: 'Metrado total a ejecutar.' },
+                hhPresupuestadas: { type: 'number', description: 'Horas-hombre presupuestadas (metrado / rendimiento típico).' },
+                cuadrilla: { type: 'string', description: 'Cuadrilla asignada. Opcional.' },
+                trabajadores: { type: 'number', description: 'N° de trabajadores de la cuadrilla. Opcional.' },
+              },
+              required: ['nombre', 'metradoTotal', 'hhPresupuestadas'],
+            },
+          },
+        },
+        required: ['fase', 'partidas'],
+      },
+    },
+  },
 ]
+
+// Plantilla de etapas por fase (keys = las que usan los registros de generar_proyecto).
+// Se usa para SEMBRAR las etapas dinámicas y que las actividades mapeen a su etapa.
+const ETAPAS_TEMPLATE: Record<string, { key: string; nombre: string; descripcion: string }[]> = {
+  demolicion: [
+    { key: 'gestion',      nombre: 'Gestión y permisos',      descripcion: 'Licencias, no-patrimonio, póliza CAR, EO-RS' },
+    { key: 'preliminares', nombre: 'Trabajos preliminares',   descripcion: 'Desconexión de servicios, cerco, protección de medianeros' },
+    { key: 'desmontaje',   nombre: 'Desmontaje selectivo',    descripcion: 'Carpintería, instalaciones y materiales reaprovechables' },
+    { key: 'demolicion',   nombre: 'Demolición estructural',  descripcion: 'De arriba hacia abajo: losas, muros, columnas, cimientos (G.050)' },
+    { key: 'eliminacion',  nombre: 'Eliminación de desmonte', descripcion: 'Carguío, volquetes y disposición en escombrera autorizada' },
+    { key: 'limpieza',     nombre: 'Limpieza y entrega',      descripcion: 'Nivelación final — terreno listo para excavación' },
+  ],
+  excavacion: [
+    { key: 'trazo',             nombre: 'Trazo y replanteo', descripcion: 'Topografía, niveles y ejes' },
+    { key: 'calzaduras',        nombre: 'Calzaduras',        descripcion: 'Sostenimiento por anillos según profundidad' },
+    { key: 'excavacion_masiva', nombre: 'Excavación masiva', descripcion: 'Movimiento de tierras por sótano' },
+    { key: 'perfilado',         nombre: 'Perfilado y fondo',  descripcion: 'Nivelación para cimentación' },
+  ],
+  construccion: [
+    { key: 'cimentacion', nombre: 'Cimentación',         descripcion: 'Platea, zapatas y muros de sótano' },
+    { key: 'estructura',  nombre: 'Estructura por piso', descripcion: 'Verticales, encofrado, instalaciones, vaciado de losa' },
+    { key: 'albanileria', nombre: 'Albañilería',         descripcion: 'Tabiquería y muros no portantes' },
+    { key: 'azotea',      nombre: 'Azotea y tanque',     descripcion: 'Cierre del casco' },
+  ],
+  acabados: [
+    { key: 'humedos',       nombre: 'Acabados húmedos',     descripcion: 'Tarrajeo, contrapisos y enchapes' },
+    { key: 'instalaciones', nombre: 'Instalaciones finales', descripcion: 'Aparatos, tableros y griferías' },
+    { key: 'secos',         nombre: 'Acabados secos',        descripcion: 'Carpintería, vidrios y pintura' },
+    { key: 'entrega',       nombre: 'Entrega de unidades',   descripcion: 'Terminadas y entregadas a propietarios' },
+  ],
+  administracion: [
+    { key: 'preobra',   nombre: 'Pre-obra',         descripcion: 'Licencias, pólizas y contratos iniciales' },
+    { key: 'ejecucion', nombre: 'Durante la obra',  descripcion: 'Valorizaciones, ventas y supervisión' },
+    { key: 'cierre',    nombre: 'Cierre y entrega', descripcion: 'Conformidad, declaratoria, independización' },
+  ],
+}
 
 // ─── Service ───────────────────────────────────────────────────────────────────
 
@@ -701,6 +1231,8 @@ export class ChatService {
     private analisisService: AnalisisService,
     private proyectosService: ProyectosService,
     private fasesDetalle: FasesDetalleService,
+    private registrosFase: RegistrosFaseService,
+    private documentosRequeridos: DocumentosRequeridosService,
   ) {}
 
   getAnalisis(proyectoId: string): any | undefined {
@@ -756,12 +1288,123 @@ export class ChatService {
     })
   }
 
+  /** Extrae texto de un PDF. pdf-parse falla en su 1ra llamada por proceso ("bad XRef"); reintenta. */
+  private async parsePdf(buffer: Buffer): Promise<string> {
+    try {
+      return (await pdfParse(buffer)).text ?? ''
+    } catch {
+      // Reintento: la 2da llamada de pdf-parse sí funciona
+      return (await pdfParse(buffer)).text ?? ''
+    }
+  }
+
+  /** Lee un Estudio de Mecánica de Suelos (PDF) y extrae los parámetros geotécnicos. */
+  async analizarEms(body: { pdfBase64: string; nombre?: string }): Promise<{ datos?: any; error?: string }> {
+    if (!body.pdfBase64) return { error: 'Falta el PDF del EMS.' }
+    if (!this.llm.isAgenticProvider()) return { error: 'El análisis del EMS requiere el proveedor OpenAI (GPT-4o).' }
+
+    let texto = ''
+    try {
+      const buffer = Buffer.from(body.pdfBase64, 'base64')
+      texto = (await this.parsePdf(buffer)).slice(0, 14000)
+    } catch (e: any) {
+      this.logger.error('Error leyendo EMS PDF:', e?.message)
+      return { error: 'No pude leer el PDF.' }
+    }
+    if (!texto.trim()) return { error: 'El PDF no tiene texto legible (¿es escaneado?). Ingresa los datos a mano.' }
+
+    const messages: LlmMessage[] = [
+      {
+        role: 'system',
+        content:
+          'Eres un ingeniero geotécnico en Lima, Perú. Extrae del Estudio de Mecánica de Suelos (EMS, RNE E.050) los parámetros clave. ' +
+          'Responde EXCLUSIVAMENTE con un objeto JSON válido (sin markdown, sin texto extra) con EXACTAMENTE estas claves (usa "" si el dato no aparece): ' +
+          'laboratorio, fecha, tipoSuelo, capacidadPortante, nivelFreatico, profCimentacion, agresividad, anguloFriccion, cohesion, asentamiento, recomendaciones. ' +
+          'Incluye la unidad dentro del valor (ej: "2.5 kg/cm²", "-8.0 m", "32°"). tipoSuelo con su clasificación SUCS si aparece. ' +
+          'recomendaciones: 1-3 frases clave para la excavación/cimentación (tipo de cimentación, profundidad de desplante, calzaduras, freático). No inventes datos que no estén.',
+      },
+      { role: 'user', content: `Contenido del EMS:\n${texto}` },
+    ]
+
+    try {
+      const r = await this.llm.completWithTools(messages, [])
+      const raw = r.content ?? ''
+      const m = raw.match(/\{[\s\S]*\}/)
+      if (!m) return { error: 'No pude interpretar el EMS.' }
+      const datos = JSON.parse(m[0])
+      this.logger.log(`EMS "${body.nombre ?? ''}" interpretado para proyecto`)
+      return { datos }
+    } catch (err: any) {
+      this.logger.error('Error interpretando EMS:', err?.response?.data?.error?.message ?? err?.message)
+      return { error: `No se pudo interpretar el EMS: ${err?.response?.data?.error?.message ?? err?.message}` }
+    }
+  }
+
+  /** Analiza con visión (GPT-4o) las fotos de avance de una etapa de obra. */
+  async analizarFotos(body: {
+    fase?: string; etapaNombre?: string; etapaDescripcion?: string
+    imagenes: { nombre?: string; dataUrl: string }[]
+  }): Promise<{ analisis: string }> {
+    const imgs = (body.imagenes ?? []).filter((i) => i?.dataUrl?.startsWith('data:image')).slice(0, 4)
+    if (imgs.length === 0) return { analisis: 'No hay fotos válidas para analizar.' }
+    if (!this.llm.isAgenticProvider()) {
+      return { analisis: 'El análisis por visión requiere el proveedor OpenAI (GPT-4o). Actívalo en el .env (LLM_PROVIDER=openai).' }
+    }
+
+    const ctx = [
+      body.fase ? `Fase de obra: ${body.fase}.` : '',
+      body.etapaNombre ? `Etapa: ${body.etapaNombre}.` : '',
+      body.etapaDescripcion ? `Descripción de la etapa: ${body.etapaDescripcion}.` : '',
+    ].filter(Boolean).join(' ')
+
+    const messages: LlmMessage[] = [
+      {
+        role: 'system',
+        content:
+          'Eres un ingeniero supervisor de obra en Lima, Perú, experto en demolición y excavación (RNE, G.050 de seguridad). Analizas fotos del avance real de obra. Sé concreto, técnico y breve. Responde SIEMPRE en español con este formato markdown:\n' +
+          '**Qué se observa:** 1-2 frases.\n' +
+          '**Avance estimado:** un % aproximado con justificación corta (si no es estimable, dilo).\n' +
+          '**Seguridad (G.050):** faltantes o riesgos visibles (EPP, malla anti-polvo, protección de medianeros, orden). Si no ves problemas, dilo.\n' +
+          '**Recomendaciones:** 1-3 acciones concretas.\n' +
+          'No inventes lo que no se ve. Si la foto no corresponde a obra, indícalo.',
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: `Analiza estas ${imgs.length} foto(s) de avance de obra. ${ctx}` },
+          ...imgs.map((i) => ({ type: 'image_url' as const, image_url: { url: i.dataUrl } })),
+        ],
+      },
+    ]
+
+    try {
+      const r = await this.llm.completWithTools(messages, [])
+      return { analisis: r.content?.trim() || 'No pude generar el análisis. Intenta de nuevo.' }
+    } catch (err: any) {
+      this.logger.error('Error analizando fotos:', err?.response?.data?.error?.message ?? err?.message)
+      return { analisis: `No se pudo analizar las fotos: ${err?.response?.data?.error?.message ?? err?.message}` }
+    }
+  }
+
   async stream(dto: StreamChatDto, user: any, res: Response): Promise<void> {
     const sesion = await this.getOrCreateSesion(dto.proyectoId, user.id)
 
     await this.mensajeRepo.save(
       this.mensajeRepo.create({ sesionId: sesion.id, rol: 'user', contenido: dto.mensaje }),
     )
+
+    // Persistir el adjunto del chat como Documento del proyecto: así la IA lo
+    // reconoce, queda guardado y puede vincularse a un documento requerido.
+    if (dto.archivoBase64 && dto.archivoTipo) {
+      try {
+        await this.documentos.subir({
+          proyectoId: dto.proyectoId,
+          nombre: dto.archivoNombre ?? 'adjunto',
+          mimeType: dto.archivoTipo,
+          base64: dto.archivoBase64,
+        })
+      } catch (e: any) { this.logger.warn(`No se pudo persistir adjunto: ${e?.message}`) }
+    }
 
     const history = await this.mensajeRepo.find({
       where: { sesionId: sesion.id },
@@ -776,8 +1419,15 @@ export class ChatService {
     // Construir el último mensaje del usuario — puede incluir archivo adjunto puntual
     const lastUserContent = await this.buildUserContent(dto)
 
-    // System prompt enriquecido con documentos del proyecto
-    const systemPrompt = SYSTEM_PROMPT + contextoDocumentos
+    // System prompt enriquecido con documentos del proyecto + contexto de UI
+    const FASES_UI: Record<string, string> = {
+      demolicion: 'Demolición', excavacion: 'Excavación', construccion: 'Construcción',
+      acabados: 'Acabados', administracion: 'Administración',
+    }
+    const contextoUi = dto.faseActual && FASES_UI[dto.faseActual]
+      ? `\n\n---\n## CONTEXTO DE PANTALLA\nEl usuario está viendo ahora el módulo de la fase **${FASES_UI[dto.faseActual]}** (slug: ${dto.faseActual}). Si pide una acción sin nombrar la fase (ej: "completa los trabajos preliminares"), asume que se refiere a ESTA fase. Aun así, si el nombre puede existir en otras fases o hay ambigüedad, CONFÍRMALE a qué fase/etapa se refiere antes de actuar.`
+      : ''
+    const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + contextoUi
 
     // Mensajes del historial previo
     const historialMsgs: LlmMessage[] = history.slice(0, -1).map((m) => ({
@@ -827,9 +1477,29 @@ export class ChatService {
   // ─── Construcción de contenido de usuario con archivo ────────────────────────
 
   private async buildUserContent(dto: StreamChatDto): Promise<string | LlmContentPart[]> {
-    if (!dto.archivoBase64 || !dto.archivoTipo) return dto.mensaje
+    if (!dto.archivoBase64) return dto.mensaje
 
-    const tipo = dto.archivoTipo.toLowerCase()
+    const tipo = (dto.archivoTipo ?? '').toLowerCase()
+    const nombre = (dto.archivoNombre ?? '').toLowerCase()
+
+    // DXF (plano CAD) → extraer capas/textos/bloques con ezdxf e inyectar para interpretar
+    if (nombre.endsWith('.dxf') || tipo.includes('dxf')) {
+      try {
+        const r = await this.motores.leerPlano(dto.archivoBase64)
+        const resumen = [
+          r.dxf_version ? `Versión DXF: ${r.dxf_version}.` : '',
+          r.extents ? `Dimensiones del dibujo: ${r.extents.ancho_u} x ${r.extents.alto_u} unidades.` : '',
+          (r.capas?.length) ? `Capas (${r.capas.length}): ${r.capas.join(', ')}.` : '',
+          (r.bloques && Object.keys(r.bloques).length) ? `Bloques insertados: ${Object.entries(r.bloques).map(([k, v]) => `${k} x${v}`).join(', ')}.` : '',
+          `Total de entidades: ${r.total_entidades}.`,
+          (r.textos?.length) ? `TEXTOS / LEYENDAS del plano (${r.total_textos}):\n- ${r.textos.join('\n- ')}` : 'El plano no tiene textos legibles.',
+        ].filter(Boolean).join('\n')
+        return `${dto.mensaje}\n\n---\n**Plano DXF adjunto: ${dto.archivoNombre ?? 'plano.dxf'}** — datos extraídos del CAD para que los INTERPRETES (no son míos, vienen del archivo):\n${resumen}`
+      } catch (err: any) {
+        this.logger.error('Error leyendo DXF:', err?.message)
+        return `${dto.mensaje}\n\n(No pude leer el plano DXF adjunto: ${err?.message ?? 'error'}.)`
+      }
+    }
 
     // Imagen → visión GPT-4o
     if (tipo.startsWith('image/')) {
@@ -841,11 +1511,10 @@ export class ChatService {
     }
 
     // PDF → extraer texto e inyectar como contexto
-    if (tipo === 'application/pdf') {
+    if (tipo === 'application/pdf' || nombre.endsWith('.pdf')) {
       try {
         const buffer = Buffer.from(dto.archivoBase64, 'base64')
-        const parsed = await pdfParse(buffer)
-        const texto = parsed.text?.slice(0, 8000) ?? '' // máx 8k chars para no saturar el contexto
+        const texto = (await this.parsePdf(buffer)).slice(0, 8000) // máx 8k chars para no saturar el contexto
         return `${dto.mensaje}\n\n---\n**Archivo adjunto: ${dto.archivoNombre ?? 'documento.pdf'}**\n\`\`\`\n${texto}\n\`\`\``
       } catch (err: any) {
         this.logger.error('Error extrayendo texto de PDF:', err?.message)
@@ -909,6 +1578,16 @@ export class ChatService {
     if (name === 'generar_plano') return this.toolGenerarPlano(args, res, proyectoId)
     if (name === 'buscar_en_internet') return this.toolBuscarInternet(args.query, res)
     if (name === 'generar_proyecto') return this.toolGenerarProyecto(args, res, proyectoId)
+    if (name === 'crear_etapas') return this.toolCrearEtapas(args, res, proyectoId)
+    if (name === 'consultar_documentos_requeridos') return this.toolConsultarDocumentosRequeridos(args, proyectoId)
+    if (name === 'completar_documento_requerido') return this.toolCompletarDocumentoRequerido(args, res, proyectoId)
+    if (name === 'crear_seguridad') return this.toolCrearSeguridad(args, res, proyectoId)
+    if (name === 'crear_colindantes') return this.toolCrearColindantes(args, res, proyectoId)
+    if (name === 'crear_calzaduras') return this.toolCrearCalzaduras(args, res, proyectoId)
+    if (name === 'crear_movimiento_tierras') return this.toolCrearMovimientoTierras(args, res, proyectoId)
+    if (name === 'crear_vaciados') return this.toolCrearVaciados(args, res, proyectoId)
+    if (name === 'actualizar_actividades') return this.toolActualizarActividades(args, res, proyectoId)
+    if (name === 'crear_productividad') return this.toolCrearProductividad(args, res, proyectoId)
 
     return { error: `Tool desconocida: ${name}` }
   }
@@ -984,6 +1663,30 @@ export class ChatService {
             .slice(0, 10)
           await this.fasesDetalle.guardar(proyectoId, f.fase, { secciones })
         }
+
+        // Registros operativos de la fase (demoliciones, vaciados, unidades, trámites)
+        if (Array.isArray(f.registros) && f.registros.length > 0) {
+          const validos = f.registros.filter((r: any) => r?.nombre).slice(0, 60)
+          await this.registrosFase.reemplazar(proyectoId, f.fase, validos)
+
+          // Sembrar las etapas dinámicas (merge) para que las actividades mapeen a su etapa
+          const tpl = ETAPAS_TEMPLATE[f.fase] ?? []
+          if (tpl.length) {
+            const ekey = `${f.fase}__etapas`
+            const ex = await this.fasesDetalle.obtener(proyectoId, ekey)
+            const prevEt: any[] = Array.isArray(ex?.datos?.etapas) ? ex!.datos.etapas : []
+            const have = new Set(prevEt.map((e) => e.key))
+            const mergedEt = [...prevEt, ...tpl.filter((t) => !have.has(t.key))]
+            await this.fasesDetalle.guardar(proyectoId, ekey, { etapas: mergedEt })
+            res.write(`event:etapas_creadas\ndata:${JSON.stringify({ fase: f.fase, total: mergedEt.length })}\n\n`)
+          }
+        }
+
+        // Checklist de documentos requeridos (permisos, certificados...)
+        if (Array.isArray(f.documentos_requeridos) && f.documentos_requeridos.length > 0) {
+          const docs = f.documentos_requeridos.filter((d: any) => d?.nombre).slice(0, 30)
+          await this.documentosRequeridos.reemplazar(proyectoId, f.fase, docs)
+        }
       }
 
       // Equipos recomendados (opcional)
@@ -1019,6 +1722,514 @@ export class ChatService {
     } catch (err: any) {
       this.logger.error('Error generando proyecto:', err?.message)
       return { error: `Error generando módulos del proyecto: ${err?.message}` }
+    }
+  }
+
+  private async toolCrearEtapas(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const FASES_VALIDAS = ['demolicion', 'excavacion', 'construccion', 'acabados', 'administracion']
+    const fase = String(args.fase ?? '')
+    if (!FASES_VALIDAS.includes(fase)) {
+      return { error: 'Fase inválida. Usa: ' + FASES_VALIDAS.join(', ') }
+    }
+    const incoming = (args.etapas ?? []).filter((e: any) => e?.nombre && String(e.nombre).trim())
+    if (incoming.length === 0) {
+      return { error: 'No se recibieron etapas válidas (cada etapa necesita al menos un nombre).' }
+    }
+
+    const slug = (s: string) =>
+      s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 24) || 'etapa'
+
+    const ESTADO_INICIAL: Record<string, string> = {
+      demolicion: 'Planificada', excavacion: 'Planificada', construccion: 'Programado',
+      acabados: 'En acabados', administracion: 'Por iniciar',
+    }
+
+    try {
+      res.write(`event:status\ndata:${JSON.stringify({ step: `Creando etapas de ${fase}...`, icon: 'git-branch' })}\n\n`)
+
+      const detalleKey = `${fase}__etapas`
+      const existing = await this.fasesDetalle.obtener(proyectoId, detalleKey)
+      const prev: any[] = Array.isArray(existing?.datos?.etapas) ? existing!.datos.etapas : []
+      const reemplazar = args.reemplazar === true
+      const base: any[] = reemplazar ? [] : prev
+      if (reemplazar) await this.registrosFase.reemplazar(proyectoId, fase, []) // limpia actividades viejas
+
+      const usadas = base.map((e) => e.key)
+      const nombresExistentes = new Set(base.map((e) => String(e.nombre).trim().toLowerCase()))
+      const nuevas: { key: string; nombre: string; descripcion: string; actividades: any[] }[] = []
+      for (const e of incoming.slice(0, 14)) {
+        const nombre = String(e.nombre).trim().slice(0, 120)
+        if (nombresExistentes.has(nombre.toLowerCase())) continue // evita duplicados por nombre
+        let key = slug(nombre)
+        let i = 2
+        while (usadas.includes(key)) key = `${slug(nombre)}-${i++}`
+        usadas.push(key)
+        nombresExistentes.add(nombre.toLowerCase())
+        nuevas.push({
+          key, nombre, descripcion: String(e.descripcion ?? '').slice(0, 400),
+          actividades: Array.isArray(e.actividades) ? e.actividades : [],
+        })
+      }
+
+      const merged = [...base, ...nuevas.map((e) => ({ key: e.key, nombre: e.nombre, descripcion: e.descripcion }))]
+      await this.fasesDetalle.guardar(proyectoId, detalleKey, { etapas: merged })
+
+      // Crear las actividades (sub-tareas) de cada etapa nueva, etiquetadas con su key
+      const estadoBase = ESTADO_INICIAL[fase] ?? 'Planificada'
+      let totalActs = 0
+      for (const et of nuevas) {
+        for (const a of (et.actividades ?? []).slice(0, 12)) {
+          if (!a?.nombre) continue
+          const datos = (a.datos && typeof a.datos === 'object') ? { ...a.datos } : {}
+          datos.etapa = et.key
+          await this.registrosFase.crear(proyectoId, fase, {
+            nombre: String(a.nombre).slice(0, 200),
+            estado: String(a.estado ?? estadoBase).slice(0, 50),
+            datos,
+          })
+          totalActs++
+        }
+      }
+
+      // Checklist de documentos requeridos (append, sin duplicar por nombre)
+      let totalDocs = 0
+      const docsIn = (args.documentos_requeridos ?? []).filter((d: any) => d?.nombre)
+      if (docsIn.length) {
+        const previos = await this.documentosRequeridos.listar(proyectoId, fase)
+        const yaHay = new Set(previos.map((d) => d.nombre.trim().toLowerCase()))
+        for (const d of docsIn.slice(0, 30)) {
+          const nombre = String(d.nombre).trim()
+          if (yaHay.has(nombre.toLowerCase())) continue
+          yaHay.add(nombre.toLowerCase())
+          await this.documentosRequeridos.crear(proyectoId, fase, {
+            nombre: nombre.slice(0, 200),
+            descripcion: String(d.descripcion ?? '').slice(0, 1000),
+            entidad: String(d.entidad ?? '').slice(0, 120),
+            obligatorio: d.obligatorio !== false,
+          })
+          totalDocs++
+        }
+      }
+
+      res.write(`event:etapas_creadas\ndata:${JSON.stringify({ fase, total: merged.length })}\n\n`)
+      this.logger.log(`Etapas ${fase} de ${proyectoId}: +${nuevas.length} etapas, +${totalActs} acts, +${totalDocs} docs (total ${merged.length})`)
+
+      return {
+        ok: true,
+        fase,
+        etapas_creadas: nuevas.map((e) => e.nombre),
+        total_etapas: merged.length,
+        actividades_creadas: totalActs,
+        documentos_creados: totalDocs,
+        mensaje: `Se crearon ${nuevas.length} etapa(s) con ${totalActs} actividad(es)${totalDocs ? ` y ${totalDocs} documento(s) requerido(s)` : ''} en la fase ${fase}. El usuario ya lo ve en el módulo (pipeline + cronograma + pestaña Documentos). Confírmaselo y dile que puede editar/agregar lo que necesite y subir fotos en cada etapa.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error creando etapas:', err?.message)
+      return { error: `Error creando etapas: ${err?.message}` }
+    }
+  }
+
+  private async toolConsultarDocumentosRequeridos(args: Record<string, any>, proyectoId: string): Promise<any> {
+    const FASES_VALIDAS = ['demolicion', 'excavacion', 'construccion', 'acabados', 'administracion']
+    const fases = args.fase && FASES_VALIDAS.includes(args.fase) ? [args.fase] : FASES_VALIDAS
+    const out: any[] = []
+    for (const f of fases) {
+      const docs = await this.documentosRequeridos.listar(proyectoId, f)
+      for (const d of docs) {
+        out.push({
+          id: d.id, fase: f, nombre: d.nombre, entidad: d.entidad,
+          obligatorio: d.obligatorio,
+          estado: d.estado === 'subido' ? 'entregado' : d.estado === 'no_aplica' ? 'no aplica' : 'pendiente',
+        })
+      }
+    }
+    if (out.length === 0) {
+      return { documentos: [], mensaje: 'El proyecto aún no tiene checklist de documentos requeridos. Puedes crearlo con crear_etapas (campo documentos_requeridos).' }
+    }
+    return { documentos: out, mensaje: 'Estos son los documentos que pide el proyecto. Para vincular un archivo que el usuario subió a uno de estos, usa completar_documento_requerido con el nombre EXACTO.' }
+  }
+
+  private async toolCompletarDocumentoRequerido(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const FASES_VALIDAS = ['demolicion', 'excavacion', 'construccion', 'acabados', 'administracion']
+    const fase = String(args.fase ?? '')
+    const nombre = String(args.nombre ?? '').trim()
+    if (!FASES_VALIDAS.includes(fase)) return { error: 'Fase inválida. Usa: ' + FASES_VALIDAS.join(', ') }
+    if (!nombre) return { error: 'Falta el nombre del documento a completar.' }
+
+    const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]/g, '').trim()
+    const target = norm(nombre)
+
+    const docs = await this.documentosRequeridos.listar(proyectoId, fase)
+    if (docs.length === 0) return { error: `La fase ${fase} no tiene documentos requeridos. Créalos primero.` }
+
+    // Match por nombre: exacto > contiene en cualquier dirección
+    const match = docs.find((d) => norm(d.nombre) === target)
+      ?? docs.find((d) => norm(d.nombre).includes(target) || target.includes(norm(d.nombre)))
+    if (!match) {
+      return {
+        error: `No encontré "${nombre}" en el checklist de ${fase}.`,
+        documentos_disponibles: docs.map((d) => d.nombre),
+      }
+    }
+
+    const subida = await this.documentos.ultimaSubida(proyectoId)
+    await this.documentosRequeridos.actualizar(match.id, {
+      estado: 'subido',
+      documentoId: subida?.id ?? match.documentoId ?? null,
+      notas: subida?.nombre ?? match.notas ?? 'Entregado',
+    })
+
+    res.write(`event:documentos_actualizados\ndata:${JSON.stringify({ fase })}\n\n`)
+    this.logger.log(`Documento "${match.nombre}" (${fase}) de ${proyectoId} marcado como entregado`)
+    return {
+      ok: true,
+      documento: match.nombre,
+      fase,
+      archivo_vinculado: subida?.nombre ?? null,
+      estado: 'entregado',
+      mensaje: `Listo: "${match.nombre}" quedó marcado como ENTREGADO en la pestaña Documentos de ${fase}${subida ? `, vinculado al archivo "${subida.nombre}"` : ''}. Confírmaselo al usuario.`,
+    }
+  }
+
+  private async toolCrearSeguridad(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const FASES_VALIDAS = ['demolicion', 'excavacion', 'construccion', 'acabados', 'administracion']
+    const fase = String(args.fase ?? '')
+    if (!FASES_VALIDAS.includes(fase)) return { error: 'Fase inválida. Usa: ' + FASES_VALIDAS.join(', ') }
+
+    const uid = () => Math.random().toString(36).slice(2, 10)
+    const checklistIn = (args.checklist ?? []).filter((c: any) => c?.item && String(c.item).trim())
+    const riesgosIn = (args.riesgos ?? []).filter((r: any) => typeof r === 'string' && r.trim())
+    const incidentesIn = (args.incidentes ?? []).filter((i: any) => i?.descripcion && String(i.descripcion).trim())
+    if (checklistIn.length === 0 && riesgosIn.length === 0) {
+      return { error: 'Envía al menos un checklist de seguridad o riesgos identificados.' }
+    }
+
+    try {
+      res.write(`event:status\ndata:${JSON.stringify({ step: `Armando plan de seguridad de ${fase}...`, icon: 'shield' })}\n\n`)
+
+      const key = `${fase}__seguridad`
+      const existing = await this.fasesDetalle.obtener(proyectoId, key)
+      const prev: any = existing?.datos ?? {}
+      const reemplazar = args.reemplazar === true
+
+      const prevChecklist: any[] = !reemplazar && Array.isArray(prev.checklist) ? prev.checklist : []
+      const prevRiesgos: string[] = !reemplazar && Array.isArray(prev.riesgos) ? prev.riesgos : []
+      const prevIncidentes: any[] = Array.isArray(prev.incidentes) ? prev.incidentes : [] // los incidentes nunca se borran por IA
+
+      const yaItems = new Set(prevChecklist.map((c) => String(c.item).trim().toLowerCase()))
+      const checklist = [...prevChecklist]
+      for (const c of checklistIn.slice(0, 30)) {
+        const item = String(c.item).trim()
+        if (yaItems.has(item.toLowerCase())) continue
+        yaItems.add(item.toLowerCase())
+        checklist.push({ id: uid(), item: item.slice(0, 240), estado: 'pendiente', critico: c.critico === true })
+      }
+
+      const riesgos = Array.from(new Set([...prevRiesgos, ...riesgosIn.map((r: string) => String(r).trim().slice(0, 160))]))
+
+      const incidentes = [...prevIncidentes]
+      for (const i of incidentesIn.slice(0, 20)) {
+        const sev = ['baja', 'media', 'alta'].includes(i.severidad) ? i.severidad : 'media'
+        incidentes.push({ id: uid(), fecha: (i.fecha ?? new Date().toISOString().slice(0, 10)), descripcion: String(i.descripcion).trim().slice(0, 500), severidad: sev, estado: 'abierto' })
+      }
+
+      await this.fasesDetalle.guardar(proyectoId, key, { checklist, incidentes, riesgos })
+      res.write(`event:seguridad_actualizada\ndata:${JSON.stringify({ fase })}\n\n`)
+      this.logger.log(`Seguridad ${fase} de ${proyectoId}: ${checklist.length} ítems, ${riesgos.length} riesgos, ${incidentes.length} incidentes`)
+
+      return {
+        ok: true,
+        fase,
+        items_checklist: checklist.length,
+        riesgos: riesgos.length,
+        mensaje: `Plan de seguridad de ${fase} listo: ${checklist.length} ítem(s) de checklist y ${riesgos.length} riesgo(s) identificado(s). El usuario lo ve en la pestaña Seguridad, donde puede marcar cumplimiento y reportar incidentes. Resume los riesgos clave y recuérdale lo crítico (G.050).`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error creando seguridad:', err?.message)
+      return { error: `Error creando plan de seguridad: ${err?.message}` }
+    }
+  }
+
+  private async toolCrearColindantes(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const incoming = (args.colindantes ?? []).filter((c: any) => c?.nombre && String(c.nombre).trim())
+    if (incoming.length === 0) return { error: 'No se recibieron colindantes válidos (cada uno necesita al menos un nombre/referencia).' }
+
+    const uid = () => Math.random().toString(36).slice(2, 10)
+    const ESTADOS = ['sin_revisar', 'sin_observaciones', 'con_observaciones']
+    try {
+      res.write(`event:status\ndata:${JSON.stringify({ step: 'Registrando colindantes...', icon: 'users' })}\n\n`)
+      const key = 'colindantes'
+      const existing = await this.fasesDetalle.obtener(proyectoId, key)
+      const prev: any[] = Array.isArray(existing?.datos?.colindantes) ? existing!.datos.colindantes : []
+      const yaHay = new Set(prev.map((c) => String(c.nombre).trim().toLowerCase()))
+
+      const nuevos: any[] = []
+      for (const c of incoming.slice(0, 12)) {
+        const nombre = String(c.nombre).trim().slice(0, 120)
+        if (yaHay.has(nombre.toLowerCase())) continue
+        yaHay.add(nombre.toLowerCase())
+        nuevos.push({
+          id: uid(), nombre,
+          ubicacion: String(c.ubicacion ?? '').slice(0, 160),
+          estadoPrevio: ESTADOS.includes(c.estadoPrevio) ? c.estadoPrevio : 'sin_revisar',
+          observaciones: String(c.observaciones ?? '').slice(0, 600),
+          actaFirmada: false, fotosAntes: [], fotosDespues: [], reclamos: [],
+        })
+      }
+      const merged = [...prev, ...nuevos]
+      await this.fasesDetalle.guardar(proyectoId, key, { colindantes: merged })
+      res.write(`event:colindantes_actualizados\ndata:${JSON.stringify({})}\n\n`)
+      this.logger.log(`Colindantes de ${proyectoId}: +${nuevos.length} (total ${merged.length})`)
+
+      return {
+        ok: true,
+        colindantes_creados: nuevos.map((c) => c.nombre),
+        total: merged.length,
+        mensaje: `Registré ${nuevos.length} colindante(s). El usuario los ve en la pestaña Colindantes (en Demolición/Excavación), donde sube fotos del estado ANTES y DESPUÉS, marca el acta de constatación y registra reclamos. Recuérdale lo crítico: documentar el estado ANTES de demoler evita reclamos por daños.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error creando colindantes:', err?.message)
+      return { error: `Error registrando colindantes: ${err?.message}` }
+    }
+  }
+
+  private async toolCrearCalzaduras(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const incoming = (args.calzaduras ?? []).filter((c: any) => c?.sector && String(c.sector).trim())
+    if (incoming.length === 0) return { error: 'No se recibieron calzaduras válidas (cada una necesita al menos un sector).' }
+
+    const uid = () => Math.random().toString(36).slice(2, 10)
+    const num = (v: any) => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
+    try {
+      res.write(`event:status\ndata:${JSON.stringify({ step: 'Armando calzaduras...', icon: 'layers' })}\n\n`)
+      const key = 'calzaduras'
+      const existing = await this.fasesDetalle.obtener(proyectoId, key)
+      const prev: any[] = Array.isArray(existing?.datos?.calzaduras) ? existing!.datos.calzaduras : []
+      const yaHay = new Set(prev.map((c) => String(c.sector).trim().toLowerCase()))
+
+      const nuevas: any[] = []
+      for (const c of incoming.slice(0, 16)) {
+        const sector = String(c.sector).trim().slice(0, 120)
+        if (yaHay.has(sector.toLowerCase())) continue
+        yaHay.add(sector.toLowerCase())
+        nuevas.push({
+          id: uid(), sector,
+          ubicacion: String(c.ubicacion ?? '').slice(0, 160),
+          profundidadM: num(c.profundidadM), numPanos: num(c.numPanos), numAnillos: num(c.numAnillos),
+          panosCompletos: 0, anillosCompletos: 0, verticalidadOk: false,
+          dimensiones: String(c.dimensiones ?? '').slice(0, 80),
+          concreto: String(c.concreto ?? "Ciclópeo f'c=100 + 30% PM").slice(0, 80),
+          observaciones: String(c.observaciones ?? '').slice(0, 500),
+        })
+      }
+      const merged = [...prev, ...nuevas]
+      await this.fasesDetalle.guardar(proyectoId, key, { calzaduras: merged })
+      res.write(`event:calzaduras_actualizadas\ndata:${JSON.stringify({})}\n\n`)
+      this.logger.log(`Calzaduras de ${proyectoId}: +${nuevas.length} (total ${merged.length})`)
+
+      return {
+        ok: true,
+        calzaduras_creadas: nuevas.map((c) => c.sector),
+        total: merged.length,
+        mensaje: `Armé ${nuevas.length} calzadura(s) en la pestaña Calzaduras (Excavación). El usuario controla ahí el avance por paños, los anillos y la verticalidad. Recuérdale lo crítico: ejecutar por PAÑOS ALTERNADOS en anillos descendentes y controlar verticalidad y asentamientos del vecino (RNE E.050).`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error creando calzaduras:', err?.message)
+      return { error: `Error armando calzaduras: ${err?.message}` }
+    }
+  }
+
+  private async toolCrearMovimientoTierras(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const num = (v: any) => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
+    const uid = () => Math.random().toString(36).slice(2, 10)
+    const sotanosIn = (args.sotanos ?? []).filter((s: any) => s?.nombre && String(s.nombre).trim())
+    if (sotanosIn.length === 0 && !args.botadero) {
+      return { error: 'Envía al menos los sótanos/frentes con su volumen proyectado, o el botadero.' }
+    }
+    try {
+      res.write(`event:status\ndata:${JSON.stringify({ step: 'Calculando movimiento de tierras...', icon: 'truck' })}\n\n`)
+      const key = 'movimiento_tierras'
+      const existing = await this.fasesDetalle.obtener(proyectoId, key)
+      const prev: any = existing?.datos ?? {}
+      const prevSot: any[] = Array.isArray(prev.sotanos) ? prev.sotanos : []
+      const yaHay = new Set(prevSot.map((s) => String(s.nombre).trim().toLowerCase()))
+
+      const nuevos = sotanosIn.slice(0, 12)
+        .filter((s: any) => !yaHay.has(String(s.nombre).trim().toLowerCase()))
+        .map((s: any) => ({
+          id: uid(), nombre: String(s.nombre).trim().slice(0, 80),
+          volumenProyectado: num(s.volumenProyectado), volumenExcavado: 0,
+        }))
+
+      const datos = {
+        botadero: args.botadero != null ? String(args.botadero).slice(0, 160) : (prev.botadero ?? ''),
+        capacidadVolquete: args.capacidadVolquete != null ? num(args.capacidadVolquete) : (prev.capacidadVolquete ?? 15),
+        esponjamiento: args.esponjamiento != null ? num(args.esponjamiento) : (prev.esponjamiento ?? 1.25),
+        viajesRealizados: prev.viajesRealizados ?? '',
+        sotanos: [...prevSot, ...nuevos],
+      }
+      await this.fasesDetalle.guardar(proyectoId, key, datos)
+      res.write(`event:tierras_actualizadas\ndata:${JSON.stringify({})}\n\n`)
+      const totProy = datos.sotanos.reduce((s: number, x: any) => s + num(x.volumenProyectado), 0)
+      this.logger.log(`Mov. tierras de ${proyectoId}: ${datos.sotanos.length} frentes, ${totProy} m³`)
+      return {
+        ok: true,
+        frentes: datos.sotanos.length,
+        volumen_proyectado_m3: totProy,
+        mensaje: `Armé el movimiento de tierras: ${datos.sotanos.length} frente(s), ~${totProy.toLocaleString('es-PE')} m³ proyectados. El usuario lo ve en la pestaña Mov. de tierras y va registrando el volumen excavado; los viajes de volquete se calculan con el esponjamiento. Recuérdale eliminar a botadero/EO-RS autorizado.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error creando movimiento de tierras:', err?.message)
+      return { error: `Error armando movimiento de tierras: ${err?.message}` }
+    }
+  }
+
+  private async toolCrearVaciados(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const num = (v: any) => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
+    const uid = () => Math.random().toString(36).slice(2, 10)
+    const incoming = (args.vaciados ?? []).filter((v: any) => v?.elemento && String(v.elemento).trim())
+    if (incoming.length === 0) return { error: 'No se recibieron vaciados válidos (cada uno necesita al menos un elemento).' }
+    try {
+      res.write(`event:status\ndata:${JSON.stringify({ step: 'Armando plan de vaciados...', icon: 'flask' })}\n\n`)
+      const key = 'control_concreto'
+      const existing = await this.fasesDetalle.obtener(proyectoId, key)
+      const prev: any[] = Array.isArray(existing?.datos?.vaciados) ? existing!.datos.vaciados : []
+      const yaHay = new Set(prev.map((v) => `${String(v.elemento).trim().toLowerCase()}|${v.piso ?? ''}`))
+
+      const nuevos: any[] = []
+      for (const v of incoming.slice(0, 40)) {
+        const elemento = String(v.elemento).trim().slice(0, 80)
+        const piso = String(v.piso ?? '')
+        const k = `${elemento.toLowerCase()}|${piso}`
+        if (yaHay.has(k)) continue
+        yaHay.add(k)
+        nuevos.push({
+          id: uid(), elemento, piso, volumenM3: num(v.volumenM3),
+          fcDiseno: num(v.fcDiseno) || 210, slump: String(v.slump ?? '').slice(0, 20),
+          fecha: '', proveedor: String(v.proveedor ?? '').slice(0, 80), probetas: [],
+        })
+      }
+      const merged = [...prev, ...nuevos]
+      await this.fasesDetalle.guardar(proyectoId, key, { vaciados: merged })
+      res.write(`event:concreto_actualizado\ndata:${JSON.stringify({})}\n\n`)
+      this.logger.log(`Vaciados de ${proyectoId}: +${nuevos.length} (total ${merged.length})`)
+      return {
+        ok: true,
+        vaciados_creados: nuevos.map((v) => `${v.elemento}${v.piso ? ` P${v.piso}` : ''}`),
+        total: merged.length,
+        mensaje: `Armé ${nuevos.length} vaciado(s) en la pestaña Control de concreto. El usuario registra ahí las probetas (7/14/28 días) y la app marca si una sale por debajo del f'c. Recuérdale la importancia de las probetas y el slump.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error creando vaciados:', err?.message)
+      return { error: `Error armando vaciados: ${err?.message}` }
+    }
+  }
+
+  private async toolCrearProductividad(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const FASES_VALIDAS = ['demolicion', 'excavacion', 'construccion', 'acabados']
+    const fase = String(args.fase ?? '')
+    if (!FASES_VALIDAS.includes(fase)) return { error: 'Fase inválida para productividad. Usa: ' + FASES_VALIDAS.join(', ') }
+    const num = (v: any) => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
+    const uid = () => Math.random().toString(36).slice(2, 10)
+    const incoming = (args.partidas ?? []).filter((p: any) => p?.nombre && String(p.nombre).trim())
+    if (incoming.length === 0) return { error: 'No se recibieron partidas válidas (cada una necesita nombre).' }
+    try {
+      res.write(`event:status\ndata:${JSON.stringify({ step: 'Armando partidas de productividad...', icon: 'gauge' })}\n\n`)
+      const key = `${fase}__productividad`
+      const existing = await this.fasesDetalle.obtener(proyectoId, key)
+      const prev: any[] = Array.isArray(existing?.datos?.partidas) ? existing!.datos.partidas : []
+      const yaHay = new Set(prev.map((p) => String(p.nombre).trim().toLowerCase()))
+
+      const nuevas: any[] = []
+      for (const p of incoming.slice(0, 30)) {
+        const nombre = String(p.nombre).trim().slice(0, 120)
+        if (yaHay.has(nombre.toLowerCase())) continue
+        yaHay.add(nombre.toLowerCase())
+        nuevas.push({
+          id: uid(), nombre,
+          unidad: String(p.unidad ?? 'm2').slice(0, 8),
+          cuadrilla: String(p.cuadrilla ?? '').slice(0, 100),
+          trabajadores: num(p.trabajadores),
+          metradoTotal: num(p.metradoTotal),
+          hhPresupuestadas: num(p.hhPresupuestadas),
+          metradoEjecutado: 0, hhReales: 0,
+        })
+      }
+      const merged = [...prev, ...nuevas]
+      await this.fasesDetalle.guardar(proyectoId, key, { partidas: merged })
+      res.write(`event:productividad_actualizada\ndata:${JSON.stringify({ fase })}\n\n`)
+      this.logger.log(`Productividad ${fase} de ${proyectoId}: +${nuevas.length} partidas (total ${merged.length})`)
+      return {
+        ok: true,
+        fase,
+        partidas_creadas: nuevas.map((p) => p.nombre),
+        total: merged.length,
+        mensaje: `Armé ${nuevas.length} partida(s) de productividad con sus HH presupuestadas. El usuario registra el metrado ejecutado y las HH reales, y la app calcula el rendimiento (real vs previsto) y alerta si baja del 85%. Recuérdale que el rendimiento sano debe estar cerca o por encima del 100%.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error creando productividad:', err?.message)
+      return { error: `Error armando productividad: ${err?.message}` }
+    }
+  }
+
+  private async toolActualizarActividades(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const ESTADOS: Record<string, { lista: string[]; final: string }> = {
+      demolicion: { lista: ['Planificada', 'En Progreso', 'Completada'], final: 'Completada' },
+      excavacion: { lista: ['Planificada', 'En Progreso', 'Completada'], final: 'Completada' },
+      construccion: { lista: ['Programado', 'En ejecución', 'Completado'], final: 'Completado' },
+      acabados: { lista: ['En acabados', 'Terminado', 'Entregado'], final: 'Entregado' },
+      administracion: { lista: ['Por iniciar', 'En trámite', 'Observado', 'Aprobado'], final: 'Aprobado' },
+    }
+    const fase = String(args.fase ?? '')
+    const cfg = ESTADOS[fase]
+    if (!cfg) return { error: 'Fase inválida. Usa: ' + Object.keys(ESTADOS).join(', ') }
+    const pedido = String(args.estado ?? '').trim()
+    if (!pedido) return { error: 'Falta el estado a aplicar (ej: "completada").' }
+
+    const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
+    const np = norm(pedido)
+    const estado = /complet|termin|aprob|entreg|finaliz|listo|cerr/.test(np)
+      ? cfg.final
+      : (cfg.lista.find((e) => norm(e) === np || norm(e).includes(np) || np.includes(norm(e))) ?? pedido)
+
+    const regs = await this.registrosFase.listar(proyectoId, fase)
+    if (!regs.length) return { error: `La fase ${fase} no tiene actividades.` }
+
+    let objetivo = regs
+    if (Array.isArray(args.nombres) && args.nombres.length) {
+      const ns = args.nombres.map((n: any) => norm(String(n)))
+      objetivo = regs.filter((r) => ns.some((n) => norm(r.nombre).includes(n) || n.includes(norm(r.nombre))))
+    } else if (args.etapa) {
+      const det = await this.fasesDetalle.obtener(proyectoId, `${fase}__etapas`)
+      const etapas: any[] = Array.isArray(det?.datos?.etapas) ? det!.datos.etapas : []
+      const t = norm(String(args.etapa))
+      const et = etapas.find((e) => norm(e.key) === t || norm(e.nombre) === t || norm(e.nombre).includes(t) || t.includes(norm(e.nombre)))
+      const key = et?.key ?? String(args.etapa)
+      objetivo = regs.filter((r) => r.datos?.etapa === key)
+      if (!objetivo.length) {
+        return { error: `No encontré actividades en la etapa "${args.etapa}".`, etapas_disponibles: etapas.map((e) => e.nombre) }
+      }
+    }
+    if (!objetivo.length) return { error: 'No hay actividades que coincidan con el filtro.', actividades_disponibles: regs.map((r) => r.nombre).slice(0, 20) }
+
+    try {
+      res.write(`event:status\ndata:${JSON.stringify({ step: `Actualizando ${objetivo.length} actividad(es)...`, icon: 'check' })}\n\n`)
+      for (const r of objetivo) {
+        await this.registrosFase.actualizar(r.id, { estado })
+      }
+      res.write(`event:etapas_creadas\ndata:${JSON.stringify({ fase })}\n\n`)
+      this.logger.log(`Actividades ${fase} de ${proyectoId}: ${objetivo.length} -> "${estado}"`)
+      return {
+        ok: true,
+        fase,
+        actualizadas: objetivo.length,
+        estado,
+        actividades: objetivo.map((r) => r.nombre).slice(0, 15),
+        mensaje: `Marqué ${objetivo.length} actividad(es) como "${estado}". El avance de la(s) etapa(s) se actualizó solo en el módulo. Confírmaselo al usuario.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error actualizando actividades:', err?.message)
+      return { error: `Error actualizando actividades: ${err?.message}` }
     }
   }
 

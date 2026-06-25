@@ -15,6 +15,8 @@ import { KnowledgeBaseModule } from '../knowledge-base/knowledge-base.module'
 import { AnalisisModule } from '../analisis/analisis.module'
 import { ProyectosModule } from '../proyectos/proyectos.module'
 import { FasesDetalleModule } from '../fases-detalle/fases-detalle.module'
+import { RegistrosFaseModule } from '../registros-fase/registros-fase.module'
+import { DocumentosRequeridosModule } from '../documentos-requeridos/documentos-requeridos.module'
 
 @Module({
   imports: [
@@ -26,6 +28,8 @@ import { FasesDetalleModule } from '../fases-detalle/fases-detalle.module'
     AnalisisModule,
     ProyectosModule,
     FasesDetalleModule,
+    RegistrosFaseModule,
+    DocumentosRequeridosModule,
   ],
   controllers: [ChatController],
   providers: [ChatService, LlmService, PdfService],

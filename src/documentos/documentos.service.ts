@@ -29,7 +29,9 @@ export class DocumentosService {
     if (esPdf) {
       try {
         const buffer = Buffer.from(params.base64, 'base64')
-        const parsed = await pdfParse(buffer)
+        let parsed
+        try { parsed = await pdfParse(buffer) }
+        catch { parsed = await pdfParse(buffer) } // pdf-parse falla en su 1ra llamada por proceso; reintenta
         textoExtraido = parsed.text?.slice(0, 12000) ?? null
       } catch (err: any) {
         this.logger.error('Error extrayendo PDF:', err?.message)
@@ -60,6 +62,16 @@ export class DocumentosService {
 
   async eliminar(id: string): Promise<void> {
     await this.repo.delete(id)
+  }
+
+  /** Último documento subido al proyecto (para vincularlo a un documento requerido). */
+  async ultimaSubida(proyectoId: string): Promise<{ id: string; nombre: string } | null> {
+    const doc = await this.repo.findOne({
+      where: { proyectoId },
+      order: { createdAt: 'DESC' },
+      select: { id: true, nombre: true },
+    })
+    return doc ? { id: doc.id, nombre: doc.nombre } : null
   }
 
   async getContextoParaLlm(proyectoId: string): Promise<string> {

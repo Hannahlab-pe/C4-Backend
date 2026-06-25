@@ -18,4 +18,8 @@ export class StreamChatDto {
   @IsOptional()
   @IsString()
   archivoTipo?: string  // 'pdf' | 'image/jpeg' | 'image/png' | etc.
+
+  @IsOptional()
+  @IsString()
+  faseActual?: string  // módulo/fase que el usuario está viendo (contexto de UI)
 }

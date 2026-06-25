@@ -42,6 +42,19 @@ export class ChatController {
     return this.chat.getAnalisisDb(proyectoId)
   }
 
+  @Post('analizar-fotos')
+  analizarFotos(@Body() body: {
+    fase?: string; etapaNombre?: string; etapaDescripcion?: string
+    imagenes: { nombre?: string; dataUrl: string }[]
+  }) {
+    return this.chat.analizarFotos(body)
+  }
+
+  @Post('analizar-ems')
+  analizarEms(@Body() body: { pdfBase64: string; nombre?: string }) {
+    return this.chat.analizarEms(body)
+  }
+
   @Put(':proyectoId/cronograma')
   async saveCronograma(@Param('proyectoId') proyectoId: string, @Body() body: any) {
     await this.chat.guardarCronograma(proyectoId, body)
