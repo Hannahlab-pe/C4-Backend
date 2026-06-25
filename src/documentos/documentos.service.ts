@@ -22,6 +22,7 @@ export class DocumentosService {
   }): Promise<Documento> {
     const esPdf = params.mimeType === 'application/pdf'
     const esImagen = params.mimeType.startsWith('image/')
+    const esDxf = params.mimeType.toLowerCase().includes('dxf') || params.nombre.toLowerCase().endsWith('.dxf')
 
     let textoExtraido: string | null = null
     let base64Guardado: string | null = null
@@ -36,20 +37,29 @@ export class DocumentosService {
       } catch (err: any) {
         this.logger.error('Error extrayendo PDF:', err?.message)
       }
-    } else if (esImagen) {
-      base64Guardado = params.base64
+    } else if (esImagen || esDxf) {
+      base64Guardado = params.base64  // imágenes (visión) y DXF (para modificar el plano)
     }
 
     const doc = this.repo.create({
       proyectoId: params.proyectoId,
       nombre: params.nombre,
-      tipo: esPdf ? 'pdf' : esImagen ? 'image' : 'otro',
+      tipo: esPdf ? 'pdf' : esImagen ? 'image' : esDxf ? 'dxf' : 'otro',
       mimeType: params.mimeType,
       textoExtraido,
       base64: base64Guardado,
     })
 
     return this.repo.save(doc)
+  }
+
+  /** Último DXF (plano) subido al proyecto, con su base64. */
+  async ultimoDxf(proyectoId: string): Promise<{ id: string; nombre: string; base64: string } | null> {
+    const doc = await this.repo.findOne({
+      where: { proyectoId, tipo: 'dxf' },
+      order: { createdAt: 'DESC' },
+    })
+    return doc?.base64 ? { id: doc.id, nombre: doc.nombre, base64: doc.base64 } : null
   }
 
   async listar(proyectoId: string): Promise<Documento[]> {

@@ -59,6 +59,14 @@ export class MotoresService {
     return data
   }
 
+  async ubicarGrua(payload: {
+    dxf_base64: string; modelo?: string; radio_m?: number; base_m?: number
+    frente_m?: number; fondo_m?: number; esquina?: string
+  }): Promise<any> {
+    const { data } = await axios.post(`${this.baseUrl}/ubicar-grua`, payload, { timeout: 60_000, maxBodyLength: Infinity, maxContentLength: Infinity })
+    return data
+  }
+
   async plano(payload: Record<string, any>): Promise<Buffer> {
     try {
       const { data } = await axios.post(`${this.baseUrl}/plano`, payload, {

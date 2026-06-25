@@ -79,6 +79,14 @@ Puedes y debes cruzar datos de varias fuentes en la misma respuesta. Cita siempr
 Ejemplo: "El usuario indicó un precio de terreno de $900k. Según la normativa de Miraflores, aplican 12 pisos máx. El motor calcula una TIR de 24%."
 
 ════════════════════════════════════════════
+FOCO Y ESTILO — REGLA IMPORTANTE
+════════════════════════════════════════════
+- Responde SOLO a lo que el usuario pide en su mensaje ACTUAL. Haz la acción pedida y responde corto y al punto.
+- NO arrastres temas de mensajes anteriores. Si en un turno hablaste de la grúa (u otro tema) y el usuario ahora pide otra cosa (ej. crear una etapa), atiende SOLO eso y NO vuelvas a recomendar la grúa ni repitas lo anterior.
+- NO cierres cada mensaje ofreciendo lo mismo una y otra vez ("¿genero el plano?", "¿te recomiendo la grúa?"). Ofrece un siguiente paso solo si es realmente relevante a lo que el usuario acaba de pedir, y no lo repitas si ya lo ofreciste.
+- Una sola recomendación/pregunta de cierre por mensaje, como máximo.
+
+════════════════════════════════════════════
 MODO DE OPERACIÓN
 ════════════════════════════════════════════
 
@@ -135,6 +143,7 @@ Es LA forma de armar el plan operativo de una fase (sobre todo demolición). Sig
   PASO 3 — CREA: solo cuando confirme, llama a crear_etapas. OBLIGATORIO: cada etapa con NOMBRE PROPIO + su array "actividades" (las MISMAS sub-tareas que propusiste, nunca etapas vacías) + "documentos_requeridos" si aplica.
 
 - Tras crear, confírmale y RECOMIÉNDALE proactivamente el siguiente paso (ej: "¿armo también el plan de seguridad de la demolición? ¿o seguimos con la siguiente fase?").
+- ETAPA RÁPIDA: si el usuario pide crear UNA sola etapa por su título (ej. "crea una etapa llamada Instalación de maquinaria"), créala DIRECTO con crear_etapas (una etapa, con 1-2 actividades lógicas o sin actividades). NO lo interrogues por las sub-tareas — las puede agregar él después. Confirma en una línea y nada más.
 - PUEDES cambiar el estado de actividades existentes con actualizar_actividades (filtrando por etapa o por nombres); el avance se recalcula solo. NO le digas que lo haga manual: hazlo tú. PERO antes: identifica bien la FASE y la ETAPA. Si sabes la fase por el contexto de pantalla y no hay ambigüedad, hazlo directo. Si el nombre puede existir en varias fases/etapas o no estás seguro, PREGUNTA primero "¿te refieres a [etapa] de [fase]?" y actúa al confirmar. Siempre dile sobre qué fase/etapa actuaste.
 - Las fases arrancan SIN etapas. Las etapas tienen NOMBRE PROPIO; jamás uses nombres genéricos tipo "etapa 1".
 - Referencia de demolición en Lima (RNE G.050): Gestión y permisos · Trabajos preliminares · Desmontaje selectivo · Demolición estructural · Eliminación de desmonte · Limpieza y entrega. Adáptala al proyecto, no la copies ciega.
@@ -153,6 +162,7 @@ PLANOS DXF (AutoCAD/ZWCAD): cuando el ingeniero adjunte un plano .dxf, recibirá
 - Resume qué ves: n° de pisos y sótanos (dedúcelos de leyendas tipo "SOTANO 1/2", "PISO 5", "AZOTEA", niveles N.P.T.), departamentos, estacionamientos (bloques/textos), cuadro de áreas, ejes, leyenda.
 - Da recomendaciones concretas y OFRECE crear registros con lo que dedujiste, pidiendo confirmar. Ej: "Tu plano muestra 4 sótanos → ¿te armo las calzaduras con 4 anillos? / el movimiento de tierras de los 4 sótanos? / los vaciados por piso?" y al aceptar usa crear_calzaduras / crear_movimiento_tierras / crear_vaciados / crear_etapas.
 - Sé honesto: del DXF salen textos/capas/bloques/medidas, no la geometría interpretada como un humano. Si algo no está en los textos, dilo y pídelo.
+- MODIFICAR EL PLANO: si el usuario pide que le UBIQUES/DIBUJES la grúa en SU plano (ej: "dame el mismo plano pero con la grúa", "márcame dónde va la grúa"), usa ubicar_grua_en_plano (requiere que haya subido el .dxf). Pásale el modelo/radio/base de la grúa que recomendaste y el frente/fondo reales (mts). NO necesitas ejecutar analisis_completo para esto. Tras llamarla, explica la esquina elegida y aclara que es una PROPUESTA sobre su plano (la posición definitiva se valida en obra), y comenta las medidas que devolvió.
 
 MODO G — SEGURIDAD (SSOMA / RNE G.050)
 ════════════════════════════════════════════
@@ -665,6 +675,26 @@ const C4_TOOLS: LlmTool[] = [
   {
     type: 'function',
     function: {
+      name: 'ubicar_grua_en_plano',
+      description:
+        'Dibuja la grúa torre (base + radio de pluma + rótulo) SOBRE EL PLANO DXF que el usuario subió, en una capa nueva, y le devuelve el MISMO plano modificado para descargar. Úsala cuando el usuario pida "ubícame la grúa en el plano", "márcame en mi plano dónde va la grúa", etc. Requiere que el usuario ya haya adjuntado un plano .dxf por el chat. Pásale el modelo/radio/base de la grúa que recomendaste y el frente/fondo reales del terreno (en metros, para la escala). La ubicación es una PROPUESTA basada en el contorno; aclaráselo.',
+      parameters: {
+        type: 'object',
+        properties: {
+          modelo: { type: 'string', description: 'Modelo de grúa recomendado. Ej: "Potain MC85B".' },
+          radio_m: { type: 'number', description: 'Radio de pluma en metros (ficha técnica).' },
+          base_m: { type: 'number', description: 'Lado de la base en metros. Ej: 3.2.' },
+          frente_m: { type: 'number', description: 'Frente real del terreno en metros (para escalar el dibujo). Ej: 12.' },
+          fondo_m: { type: 'number', description: 'Fondo real del terreno en metros. Ej: 25.' },
+          esquina: { type: 'string', enum: ['posterior_izq', 'posterior_der', 'frontal_izq', 'frontal_der'], description: 'Esquina del terreno donde ubicar la grúa. Por defecto posterior_izq (suele cubrir mejor sin invadir el frente).' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'generar_pdf',
       description:
         'Genera el informe completo de pre-inversión en formato PDF para descargar. Llamar SOLO cuando el usuario pida explícitamente el PDF, el informe descargable o quiera llevarse el análisis.',
@@ -899,7 +929,7 @@ const C4_TOOLS: LlmTool[] = [
                 descripcion: { type: 'string', description: 'Qué abarca la etapa en 1 frase, con referencia normativa si aplica (ej: RNE G.050).' },
                 actividades: {
                   type: 'array',
-                  description: 'Sub-tareas concretas de ESTA etapa, en orden (2 a 6). Son las acciones reales del ingeniero. Ej para "Gestión y permisos": "Tramitar certificado de no Patrimonio (Min. Cultura)", "Obtener licencia de demolición FUE (Municipalidad de Barranco)".',
+                  description: 'Sub-tareas concretas de ESTA etapa, en orden (2 a 6). Al armar el PIPELINE completo, inclúyelas siempre. Si el usuario solo pide crear UNA etapa por su título, puedes omitirlas o poner 1-2.',
                   items: {
                     type: 'object',
                     properties: {
@@ -910,7 +940,7 @@ const C4_TOOLS: LlmTool[] = [
                   },
                 },
               },
-              required: ['nombre', 'actividades'],
+              required: ['nombre'],
             },
           },
           documentos_requeridos: {
@@ -1597,6 +1627,7 @@ export class ChatService {
     if (name === 'analisis_completo') return this.toolAnalisisCompleto(args, res, proyectoId)
     if (name === 'generar_pdf') return this.toolGenerarPdf(args, res, proyectoId)
     if (name === 'generar_plano') return this.toolGenerarPlano(args, res, proyectoId)
+    if (name === 'ubicar_grua_en_plano') return this.toolUbicarGruaEnPlano(args, res, proyectoId)
     if (name === 'buscar_en_internet') return this.toolBuscarInternet(args.query, res)
     if (name === 'generar_proyecto') return this.toolGenerarProyecto(args, res, proyectoId)
     if (name === 'crear_etapas') return this.toolCrearEtapas(args, res, proyectoId)
@@ -2443,6 +2474,48 @@ export class ChatService {
     } catch (err: any) {
       this.logger.error('Error generando PDF:', err?.message)
       return { error: `Error al generar PDF: ${err?.message}` }
+    }
+  }
+
+  private async toolUbicarGruaEnPlano(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const dxf = await this.documentos.ultimoDxf(proyectoId)
+    if (!dxf) {
+      return { error: 'No hay un plano DXF subido en este proyecto. Pídele al usuario que adjunte el plano (.dxf) por el chat primero.' }
+    }
+    const num = (v: any, d: number) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d }
+    try {
+      res.write(`event:status\ndata:${JSON.stringify({ step: 'Ubicando la grúa en tu plano...', icon: 'crane' })}\n\n`)
+      const r = await this.motores.ubicarGrua({
+        dxf_base64: dxf.base64,
+        modelo: String(args.modelo ?? 'Grúa torre').slice(0, 60),
+        radio_m: num(args.radio_m, 50),
+        base_m: num(args.base_m, 3.2),
+        frente_m: num(args.frente_m, 12),
+        fondo_m: num(args.fondo_m, 25),
+        esquina: ['posterior_izq', 'posterior_der', 'frontal_izq', 'frontal_der'].includes(args.esquina) ? args.esquina : 'posterior_izq',
+      })
+      if (!r?.dxf_base64) return { error: 'El motor no devolvió el plano modificado.' }
+
+      const buffer = Buffer.from(r.dxf_base64, 'base64')
+      this.planoPorProyecto.set(proyectoId, buffer)
+      try {
+        const dir = path.join(PLANOS_DIR, proyectoId)
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+        fs.writeFileSync(path.join(dir, `plano_grua_${Date.now()}.dxf`), buffer)
+      } catch { /* no bloquear */ }
+
+      res.write(`event:plano_ready\ndata:${JSON.stringify({ url: `/api/chat/plano/${proyectoId}` })}\n\n`)
+      this.logger.log(`Grúa ubicada en plano de ${proyectoId} (esquina ${r.posicion?.esquina})`)
+      return {
+        ok: true,
+        sobre_plano: dxf.nombre,
+        posicion: r.posicion,
+        medidas: r.medidas,
+        mensaje: `Dibujé la grúa (base + radio de pluma + rótulo) sobre el plano "${dxf.nombre}" en la capa C4-GRUA, en la ${r.posicion?.esquina?.replace('_', ' ')}. El usuario ya puede descargar el DXF modificado desde el botón. Explícale la ubicación elegida y aclárale que es una PROPUESTA sobre su plano (la posición óptima final debe validarla en obra). Menciona las medidas que devolvió el motor.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error ubicando grúa en plano:', err?.message)
+      return { error: `Error al ubicar la grúa en el plano: ${err?.message}` }
     }
   }
 
