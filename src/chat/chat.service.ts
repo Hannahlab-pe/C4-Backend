@@ -1489,10 +1489,12 @@ export class ChatService {
         const resumen = [
           r.dxf_version ? `Versión DXF: ${r.dxf_version}.` : '',
           r.extents ? `Dimensiones del dibujo: ${r.extents.ancho_u} x ${r.extents.alto_u} unidades.` : '',
+          (r.niveles?.length) ? `NIVELES / PLANTAS detectados (sótanos, pisos, etc.) — úsalos para contar pisos y sótanos:\n- ${r.niveles.join('\n- ')}` : '',
+          (r.titulos?.length) ? `RÓTULOS / TÍTULOS grandes del plano:\n- ${r.titulos.join('\n- ')}` : '',
           (r.capas?.length) ? `Capas (${r.capas.length}): ${r.capas.join(', ')}.` : '',
           (r.bloques && Object.keys(r.bloques).length) ? `Bloques insertados: ${Object.entries(r.bloques).map(([k, v]) => `${k} x${v}`).join(', ')}.` : '',
-          `Total de entidades: ${r.total_entidades}.`,
-          (r.textos?.length) ? `TEXTOS / LEYENDAS del plano (${r.total_textos}):\n- ${r.textos.join('\n- ')}` : 'El plano no tiene textos legibles.',
+          `Total de entidades: ${r.total_entidades} · total de textos: ${r.total_textos}.`,
+          (r.textos?.length) ? `OTROS TEXTOS del plano (muestra):\n- ${r.textos.slice(0, 120).join('\n- ')}` : 'El plano no tiene textos legibles.',
         ].filter(Boolean).join('\n')
         return `${dto.mensaje}\n\n---\n**Plano DXF adjunto: ${dto.archivoNombre ?? 'plano.dxf'}** — datos extraídos del CAD para que los INTERPRETES (no son míos, vienen del archivo):\n${resumen}`
       } catch (err: any) {
