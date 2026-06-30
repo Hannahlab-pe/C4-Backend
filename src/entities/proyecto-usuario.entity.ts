@@ -35,6 +35,14 @@ export class ProyectoUsuario {
   })
   rolEnProyecto: RolEnProyecto;
 
+  // Rol de obra: 'jefe_proyecto' | 'jefe_fase' | 'trabajador'
+  @Column({ name: 'rol_obra', type: 'varchar', length: 30, nullable: true })
+  rolObra: string | null;
+
+  // Fase asignada (para jefe_fase / trabajador). null = todas (jefe_proyecto)
+  @Column({ type: 'varchar', length: 30, nullable: true })
+  fase: string | null;
+
   @CreateDateColumn({ name: 'joined_at' })
   joinedAt: Date;
 
