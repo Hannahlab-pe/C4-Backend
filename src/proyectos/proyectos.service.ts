@@ -26,6 +26,15 @@ export class ProyectosService {
     return proyecto
   }
 
+  async update(id: string, userId: string, dto: { nombre?: string; distrito?: string }): Promise<Proyecto> {
+    await this.exigirJefe(id, userId) // solo el jefe de proyecto edita los datos
+    const proyecto = await this.proyectoRepo.findOne({ where: { id } })
+    if (!proyecto) throw new NotFoundException('Proyecto no encontrado')
+    if (typeof dto.nombre === 'string' && dto.nombre.trim()) proyecto.nombre = dto.nombre.trim()
+    if (typeof dto.distrito === 'string') proyecto.distrito = dto.distrito.trim()
+    return this.proyectoRepo.save(proyecto)
+  }
+
   // ── Equipo / roles del proyecto ────────────────────────────────────────────
   async miRol(proyectoId: string, userId: string): Promise<{ rolObra: string; fase: string | null }> {
     const link = await this.puRepo.findOne({ where: { proyectoId, usuarioId: userId } })

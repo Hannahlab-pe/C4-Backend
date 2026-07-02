@@ -24,6 +24,11 @@ export class ProyectosController {
     return this.proyectos.findOne(id)
   }
 
+  @Patch(':id')
+  update(@Param('id') id: string, @Body() dto: any, @CurrentUser() user: any) {
+    return this.proyectos.update(id, user.id, dto)
+  }
+
   @Delete(':id')
   @HttpCode(204)
   delete(@Param('id') id: string, @CurrentUser() user: any) {
