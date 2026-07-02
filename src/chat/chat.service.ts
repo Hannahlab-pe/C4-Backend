@@ -1524,12 +1524,46 @@ export class ChatService {
     res.write(`event:done\ndata:{}\n\n`)
   }
 
+  /** Resumen conciso del estado actual del proyecto, para que el bot responda "¿cómo va la obra?". */
+  private async resumenProyecto(proyectoId: string): Promise<string> {
+    const FASES = [
+      { key: 'demolicion', label: 'Demolición' },
+      { key: 'excavacion', label: 'Excavación' },
+      { key: 'construccion', label: 'Construcción' },
+      { key: 'acabados', label: 'Acabados' },
+      { key: 'administracion', label: 'Administración' },
+    ]
+    const FINALES = ['Completada', 'Terminado', 'Entregado', 'Aprobado']
+    const partes: string[] = []
+
+    const an = await this.analisisService.getByProyecto(proyectoId).catch(() => null)
+    if (an?.cabida || an?.financiero) {
+      partes.push(`• Pre-inversión: ${an.cabida?.num_departamentos ?? '—'} deptos · TIR ${an.financiero?.tir_anual_pct ?? '—'}%`)
+    }
+
+    for (const f of FASES) {
+      const et = await this.fasesDetalle.obtener(proyectoId, `${f.key}__etapas`).catch(() => null)
+      const etapas: any[] = Array.isArray(et?.datos?.etapas) ? et!.datos.etapas : []
+      const regs: any[] = await this.registrosFase.listar(proyectoId, f.key).catch(() => [])
+      if (!etapas.length && !regs.length) continue
+      const comp = regs.filter((r) => FINALES.includes(r.estado)).length
+      const pct = regs.length ? Math.round((comp / regs.length) * 100) : 0
+      const docs: any[] = await this.documentosRequeridos.listar(proyectoId, f.key).catch(() => [])
+      const docsPend = docs.filter((d) => d.estado === 'pendiente').length
+      const nombresEtapas = etapas.map((e: any) => e.nombre).join(', ')
+      partes.push(`• ${f.label}: ${pct}% (${comp}/${regs.length} actividades)${docsPend ? ` · ${docsPend} doc(s) pendiente(s)` : ''}${nombresEtapas ? `. Etapas: ${nombresEtapas}` : ''}`)
+    }
+
+    if (!partes.length) return ''
+    return `\n\n---\n## ESTADO ACTUAL DEL PROYECTO (úsalo si preguntan por el avance o los pendientes)\n${partes.join('\n')}\n`
+  }
+
   /**
    * Responde un mensaje de WhatsApp (texto → texto, sin streaming) reusando el
    * agente completo sobre el proyecto demo. El `res` es un objeto fantasma que
    * traga los eventos SSE; las acciones (crear etapas, etc.) SÍ se ejecutan de verdad.
    */
-  async responderWhatsapp(phone: string, userName: string, message: string): Promise<string> {
+  async responderWhatsapp(phone: string, userName: string, message: string, media?: { imageBase64?: string; imageMime?: string; audioBase64?: string; audioMime?: string }): Promise<string> {
     const proyectoId = process.env.WHATSAPP_DEMO_PROYECTO_ID || ''
     if (!proyectoId) {
       this.logger.warn('WHATSAPP_DEMO_PROYECTO_ID no configurado')
@@ -1537,19 +1571,38 @@ export class ChatService {
     }
 
     const contextoDocumentos = await this.documentos.getContextoParaLlm(proyectoId).catch(() => '')
+    const estadoProyecto = await this.resumenProyecto(proyectoId).catch(() => '')
     const notaWhatsapp =
       `\n\n---\n## CANAL: WHATSAPP\n` +
       `Respondes por WhatsApp a ${userName || 'un usuario de obra'}. Gestionas el proyecto "Residencial Sáenz Peña" (Barranco).\n` +
-      `- Sé BREVE y directo (2 a 6 líneas). NADA de tablas ni markdown pesado (WhatsApp no los renderiza): texto plano, y como mucho viñetas con "•".\n` +
+      `- Sé BREVE y directo (2 a 6 líneas). Texto plano: NADA de tablas ni de asteriscos dobles (**) para negrita (WhatsApp no los renderiza). Como mucho viñetas con "•".\n` +
       `- Si te piden una ACCIÓN del proyecto (crear una etapa, consultar normativa, análisis, etc.), HAZLA con tus herramientas y confírmala en una línea.\n` +
+      `- Si te preguntan "¿cómo va la obra?", por el avance o los pendientes, responde con los datos del ESTADO ACTUAL de arriba.\n` +
+      `- FIABILIDAD (crítico): NUNCA digas que hiciste algo (crear etapa, marcar actividad, etc.) si no llamaste la herramienta correspondiente y te confirmó éxito. Si no ejecutaste la tool, NO afirmes que lo hiciste — mejor di qué necesitas para hacerlo.\n` +
       `- Si el resultado es largo (un análisis), resume lo clave (TIR, N° de deptos, etc.) en pocas líneas.`
-    const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + notaWhatsapp
+    const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + estadoProyecto + notaWhatsapp
+
+    // Voz: si viene audio, transcribir y usarlo como el mensaje
+    let texto = message
+    if (media?.audioBase64) {
+      try {
+        const t = await this.transcribir({ audioBase64: media.audioBase64, mimeType: media.audioMime })
+        texto = [message, t.texto].filter(Boolean).join(' ').trim()
+      } catch (e: any) { this.logger.warn(`WhatsApp STT falló: ${e?.message}`) }
+    }
+    // Foto: contenido multimodal para que la IA (GPT-4o visión) la analice
+    const userContent: any = media?.imageBase64
+      ? [
+          { type: 'text', text: texto || 'Analiza esta foto de obra: dime el avance aproximado y si ves temas de seguridad (RNE G.050). Sé breve.' },
+          { type: 'image_url', image_url: { url: `data:${media.imageMime || 'image/jpeg'};base64,${media.imageBase64}` } },
+        ]
+      : (texto || 'Hola')
 
     const hist = this.whatsappHist.get(phone) ?? []
     const messages: LlmMessage[] = [
       { role: 'system', content: systemPrompt },
       ...hist,
-      { role: 'user', content: message },
+      { role: 'user', content: userContent },
     ]
 
     // Response "fantasma": traga los writes SSE; el loop igual ejecuta y devuelve el texto.
@@ -1567,7 +1620,7 @@ export class ChatService {
 
     const nuevoHist: LlmMessage[] = [
       ...hist,
-      { role: 'user', content: message },
+      { role: 'user', content: texto || '[foto de obra]' },
       { role: 'assistant', content: text },
     ]
     this.whatsappHist.set(phone, nuevoHist.slice(-12))

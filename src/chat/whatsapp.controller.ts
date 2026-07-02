@@ -17,7 +17,10 @@ export class WhatsappController {
   @Post('whatsapp')
   @HttpCode(200)
   async whatsapp(
-    @Body() body: { user_id?: string; user_name?: string; message?: string },
+    @Body() body: {
+      user_id?: string; user_name?: string; message?: string
+      image_base64?: string; image_mime?: string; audio_base64?: string; audio_mime?: string
+    },
     @Headers('x-webhook-secret') secret?: string,
   ) {
     const required = process.env.WHATSAPP_SHARED_SECRET
@@ -26,13 +29,18 @@ export class WhatsappController {
     }
 
     const message = (body?.message ?? '').trim()
-    if (!message) return { response: '', status: 'ignored' }
+    const hayMedia = !!(body?.image_base64 || body?.audio_base64)
+    if (!message && !hayMedia) return { response: '', status: 'ignored' }
 
     try {
       const response = await this.chat.responderWhatsapp(
         body?.user_id ?? 'anon',
         body?.user_name ?? '',
         message,
+        {
+          imageBase64: body?.image_base64, imageMime: body?.image_mime,
+          audioBase64: body?.audio_base64, audioMime: body?.audio_mime,
+        },
       )
       return { response, status: 'success' }
     } catch {
