@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { ChatController } from './chat.controller'
+import { WhatsappController } from './whatsapp.controller'
 import { ChatService } from './chat.service'
 import { LlmService } from './llm.service'
 import { PdfService } from './pdf.service'
@@ -31,7 +32,7 @@ import { DocumentosRequeridosModule } from '../documentos-requeridos/documentos-
     RegistrosFaseModule,
     DocumentosRequeridosModule,
   ],
-  controllers: [ChatController],
+  controllers: [ChatController, WhatsappController],
   providers: [ChatService, LlmService, PdfService],
 })
 export class ChatModule {}

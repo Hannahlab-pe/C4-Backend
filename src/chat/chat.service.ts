@@ -1246,6 +1246,7 @@ export class ChatService {
 
   private readonly analisisPorProyecto = new Map<string, any>()
   private readonly planoPorProyecto    = new Map<string, Buffer>()
+  private readonly whatsappHist        = new Map<string, LlmMessage[]>() // memoria por número (canal WhatsApp)
 
   constructor(
     @InjectRepository(Sesion) private sesionRepo: Repository<Sesion>,
@@ -1521,6 +1522,57 @@ export class ChatService {
     }
 
     res.write(`event:done\ndata:{}\n\n`)
+  }
+
+  /**
+   * Responde un mensaje de WhatsApp (texto → texto, sin streaming) reusando el
+   * agente completo sobre el proyecto demo. El `res` es un objeto fantasma que
+   * traga los eventos SSE; las acciones (crear etapas, etc.) SÍ se ejecutan de verdad.
+   */
+  async responderWhatsapp(phone: string, userName: string, message: string): Promise<string> {
+    const proyectoId = process.env.WHATSAPP_DEMO_PROYECTO_ID || ''
+    if (!proyectoId) {
+      this.logger.warn('WHATSAPP_DEMO_PROYECTO_ID no configurado')
+      return 'El asistente de obra aún no está configurado. Avísale al equipo de C4.'
+    }
+
+    const contextoDocumentos = await this.documentos.getContextoParaLlm(proyectoId).catch(() => '')
+    const notaWhatsapp =
+      `\n\n---\n## CANAL: WHATSAPP\n` +
+      `Respondes por WhatsApp a ${userName || 'un usuario de obra'}. Gestionas el proyecto "Residencial Sáenz Peña" (Barranco).\n` +
+      `- Sé BREVE y directo (2 a 6 líneas). NADA de tablas ni markdown pesado (WhatsApp no los renderiza): texto plano, y como mucho viñetas con "•".\n` +
+      `- Si te piden una ACCIÓN del proyecto (crear una etapa, consultar normativa, análisis, etc.), HAZLA con tus herramientas y confírmala en una línea.\n` +
+      `- Si el resultado es largo (un análisis), resume lo clave (TIR, N° de deptos, etc.) en pocas líneas.`
+    const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + notaWhatsapp
+
+    const hist = this.whatsappHist.get(phone) ?? []
+    const messages: LlmMessage[] = [
+      { role: 'system', content: systemPrompt },
+      ...hist,
+      { role: 'user', content: message },
+    ]
+
+    // Response "fantasma": traga los writes SSE; el loop igual ejecuta y devuelve el texto.
+    const fakeRes = { write: () => true, end: () => {}, flush: () => {} } as unknown as Response
+
+    let text: string
+    try {
+      text = this.llm.isAgenticProvider()
+        ? await this.runAgenticLoop(messages, fakeRes, proyectoId)
+        : await this.llm.streamChat(messages, fakeRes)
+    } catch (e: any) {
+      this.logger.error(`WhatsApp loop error: ${e?.message}`)
+      return 'Disculpa, tuve un problema procesando tu mensaje. ¿Puedes repetirlo?'
+    }
+
+    const nuevoHist: LlmMessage[] = [
+      ...hist,
+      { role: 'user', content: message },
+      { role: 'assistant', content: text },
+    ]
+    this.whatsappHist.set(phone, nuevoHist.slice(-12))
+
+    return text || 'Listo.'
   }
 
   // ─── Construcción de contenido de usuario con archivo ────────────────────────
