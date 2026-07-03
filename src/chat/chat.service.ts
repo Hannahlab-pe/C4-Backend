@@ -1584,13 +1584,18 @@ export class ChatService {
       `- Si el resultado es largo (un análisis), resume lo clave (TIR, N° de deptos, etc.) en pocas líneas.`
     const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + estadoProyecto + notaWhatsapp
 
-    // Voz: si viene audio, transcribir y usarlo como el mensaje
+    // Voz: si viene audio, transcribir y usar SOLO la transcripción real.
+    // (El bridge puede mandar un texto placeholder tipo "Esta es una nota de voz, transcríbela"
+    //  que confunde al bot; por eso lo ignoramos cuando hay audio.)
     let texto = message
     if (media?.audioBase64) {
       try {
         const t = await this.transcribir({ audioBase64: media.audioBase64, mimeType: media.audioMime })
-        texto = [message, t.texto].filter(Boolean).join(' ').trim()
+        texto = (t.texto ?? '').trim()
       } catch (e: any) { this.logger.warn(`WhatsApp STT falló: ${e?.message}`) }
+      if (!texto && !media?.imageBase64) {
+        return 'No pude entender tu nota de voz 🎤. ¿Puedes repetirla más claro o escribírmela?'
+      }
     }
     // Foto: contenido multimodal para que la IA (GPT-4o visión) la analice
     const userContent: any = media?.imageBase64
