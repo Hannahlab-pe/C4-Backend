@@ -1576,9 +1576,9 @@ export class ChatService {
       `\n\n---\n## CANAL: WHATSAPP\n` +
       `Respondes por WhatsApp a ${userName || 'un usuario de obra'}. Gestionas el proyecto "Residencial Sáenz Peña" (Barranco).\n` +
       `- Sé BREVE y directo (2 a 6 líneas). Texto plano: NADA de tablas ni de asteriscos dobles (**) para negrita (WhatsApp no los renderiza). Como mucho viñetas con "•".\n` +
-      `- Si te piden una ACCIÓN del proyecto (crear una etapa, consultar normativa, análisis, etc.), HAZLA con tus herramientas y confírmala en una línea.\n` +
+      `- ACCIÓN DIRECTA (importante): cuando te pidan crear una etapa, agregar o marcar una actividad, consultar normativa, etc., LLAMA la herramienta correspondiente DE INMEDIATO en este mismo turno. NO propongas, NO pidas confirmación, NO preguntes "¿te gustaría incluir actividades?" — por WhatsApp el usuario quiere que lo hagas YA. Si faltan detalles, usa valores por defecto razonables (ej. 1-2 actividades lógicas). Ignora cualquier paso de "proponer y luego confirmar" de otros modos.\n` +
       `- Si te preguntan "¿cómo va la obra?", por el avance o los pendientes, responde con los datos del ESTADO ACTUAL de arriba.\n` +
-      `- FIABILIDAD (crítico): NUNCA digas que hiciste algo (crear etapa, marcar actividad, etc.) si no llamaste la herramienta correspondiente y te confirmó éxito. Si no ejecutaste la tool, NO afirmes que lo hiciste — mejor di qué necesitas para hacerlo.\n` +
+      `- FIABILIDAD: como SIEMPRE ejecutas la herramienta para las acciones, confirma en una línea SOLO lo que la tool realmente hizo. Nunca afirmes una acción (crear etapa, marcar actividad) sin haber llamado la herramienta.\n` +
       `- Si el resultado es largo (un análisis), resume lo clave (TIR, N° de deptos, etc.) en pocas líneas.`
     const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + estadoProyecto + notaWhatsapp
 
