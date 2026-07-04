@@ -1551,7 +1551,14 @@ export class ChatService {
       const docs: any[] = await this.documentosRequeridos.listar(proyectoId, f.key).catch(() => [])
       const docsPend = docs.filter((d) => d.estado === 'pendiente').length
       const nombresEtapas = etapas.map((e: any) => e.nombre).join(', ')
-      partes.push(`• ${f.label}: ${pct}% (${comp}/${regs.length} actividades)${docsPend ? ` · ${docsPend} doc(s) pendiente(s)` : ''}${nombresEtapas ? `. Etapas: ${nombresEtapas}` : ''}`)
+      let bloque = `• ${f.label}: ${pct}% (${comp}/${regs.length} actividades)${docsPend ? ` · ${docsPend} doc(s) pendiente(s)` : ''}${nombresEtapas ? `. Etapas: ${nombresEtapas}` : ''}`
+      if (regs.length) {
+        const lista = regs.slice(0, 30)
+          .map((r) => `   - [${r.estado}] ${r.nombre}${r.datos?.responsable ? ' — Responsable: ' + r.datos.responsable : ''}`)
+          .join('\n')
+        bloque += `\n   Actividades:\n${lista}`
+      }
+      partes.push(bloque)
     }
 
     if (!partes.length) return ''
@@ -1579,6 +1586,8 @@ export class ChatService {
       `- ACCIÓN DIRECTA (importante): cuando te pidan crear una etapa, agregar o marcar una actividad, consultar normativa, etc., LLAMA la herramienta correspondiente DE INMEDIATO en este mismo turno. NO propongas, NO pidas confirmación, NO preguntes "¿te gustaría incluir actividades?" — por WhatsApp el usuario quiere que lo hagas YA. Si faltan detalles, usa valores por defecto razonables (ej. 1-2 actividades lógicas). Ignora cualquier paso de "proponer y luego confirmar" de otros modos.\n` +
       `- FASE CORRECTA (crítico): al crear una etapa o actividad, identifica la FASE que menciona el usuario (demolicion, excavacion, construccion, acabados, administracion) y pásala EXACTA a la herramienta (parámetro "fase"). NUNCA asumas "demolicion" por defecto: si el usuario dice "excavación", créala en excavacion; si dice "acabados", en acabados. Respeta también el NOMBRE exacto que pidió el usuario para la etapa.\n` +
       `- Si te preguntan "¿cómo va la obra?", por el avance o los pendientes, responde con los datos del ESTADO ACTUAL de arriba.\n` +
+      `- CONSULTAS por trabajador o estado: si preguntan "¿qué actividades tiene [nombre]?" o por el estado de una etapa/actividad, responde usando las Actividades del ESTADO ACTUAL (cada una trae su estado y su "Responsable").\n` +
+      `- FOTO → ACTUALIZAR: si te mandan una FOTO y piden actualizar el avance (ej. "actualiza la demolición según esta foto"), analiza qué actividades muestra la foto como TERMINADAS y márcalas con la herramienta actualizar_actividades usando sus NOMBRES EXACTOS del ESTADO ACTUAL. Confirma en pocas líneas qué marcaste como completado y qué queda pendiente.\n` +
       `- El ESTADO ACTUAL de arriba es la VERDAD del proyecto AHORA MISMO. NO menciones etapas ni actividades que no estén ahí, aunque en la conversación previa parezca que las creaste (pueden haberse borrado). Nunca digas "completé todas las etapas" salvo que el ESTADO ACTUAL lo muestre al 100%.\n` +
       `- FIABILIDAD: como SIEMPRE ejecutas la herramienta para las acciones, confirma en una línea SOLO lo que la tool realmente hizo. Nunca afirmes una acción (crear etapa, marcar actividad) sin haber llamado la herramienta.\n` +
       `- Si el resultado es largo (un análisis), resume lo clave (TIR, N° de deptos, etc.) en pocas líneas.`
