@@ -47,6 +47,14 @@ export class ProyectosService {
     if (r.rolObra !== 'jefe_proyecto') throw new ForbiddenException('Solo el jefe de proyecto puede gestionar el equipo')
   }
 
+  /** usuarioId del jefe de proyecto (dueño) de un proyecto — usado por el bot para crear proyectos con dueño válido. */
+  async duenoDe(proyectoId: string): Promise<string | null> {
+    const jefe = await this.puRepo.findOne({ where: { proyectoId, rolObra: 'jefe_proyecto' } })
+    if (jefe) return jefe.usuarioId
+    const lider = await this.puRepo.findOne({ where: { proyectoId, rolEnProyecto: RolEnProyecto.LIDER } })
+    return lider?.usuarioId ?? null
+  }
+
   async listarEquipo(proyectoId: string, userId: string) {
     await this.miRol(proyectoId, userId)
     const links = await this.puRepo.find({ where: { proyectoId }, order: { joinedAt: 'ASC' } })

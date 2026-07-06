@@ -798,6 +798,21 @@ const C4_TOOLS: LlmTool[] = [
   {
     type: 'function',
     function: {
+      name: 'crear_proyecto',
+      description: 'Crea un PROYECTO/obra NUEVO cuando el usuario lo pide por chat (ej: "crea el proyecto Torre Miraflores en San Isidro"). El proyecto queda ACTIVO: los comandos siguientes (crear etapas, etc.) trabajan sobre él. Úsala solo para crear el proyecto en sí, no para etapas.',
+      parameters: {
+        type: 'object',
+        properties: {
+          nombre: { type: 'string', description: 'Nombre del proyecto/obra. Ej: "Torre Miraflores", "Residencial Los Olivos".' },
+          distrito: { type: 'string', description: 'Distrito de Lima si el usuario lo menciona (ej: "Barranco"). Opcional.' },
+        },
+        required: ['nombre'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'generar_proyecto',
       description:
         'Genera el plan de ejecución del proyecto: rellena los checklists de tareas y equipos de cada fase (demolición, excavación, construcción, acabados, administración) en los módulos del sistema, usando TODA la data de la conversación (análisis, documentos, auditoría). Llamar SOLO después de que el usuario confirme explícitamente que quiere generar el proyecto (responde sí a "¿Comienzo con la generación del proyecto?"). SOBRESCRIBE los checklists existentes de las fases incluidas.',
@@ -1247,6 +1262,7 @@ export class ChatService {
   private readonly analisisPorProyecto = new Map<string, any>()
   private readonly planoPorProyecto    = new Map<string, Buffer>()
   private readonly whatsappHist        = new Map<string, LlmMessage[]>() // memoria por número (canal WhatsApp)
+  private readonly proyectoActivoChat  = new Map<string, string>()       // número → proyecto activo (canal chat)
 
   constructor(
     @InjectRepository(Sesion) private sesionRepo: Repository<Sesion>,
@@ -1571,7 +1587,7 @@ export class ChatService {
    * traga los eventos SSE; las acciones (crear etapas, etc.) SÍ se ejecutan de verdad.
    */
   async responderWhatsapp(phone: string, userName: string, message: string, media?: { imageBase64?: string; imageMime?: string; audioBase64?: string; audioMime?: string }): Promise<string> {
-    const proyectoId = process.env.WHATSAPP_DEMO_PROYECTO_ID || ''
+    const proyectoId = this.proyectoActivoChat.get(phone) || process.env.WHATSAPP_DEMO_PROYECTO_ID || ''
     if (!proyectoId) {
       this.logger.warn('WHATSAPP_DEMO_PROYECTO_ID no configurado')
       return 'El asistente de obra aún no está configurado. Avísale al equipo de C4.'
@@ -1585,6 +1601,7 @@ export class ChatService {
       `- Sé BREVE y directo (2 a 6 líneas). Texto plano: NADA de tablas ni de asteriscos dobles (**) para negrita (no se renderizan bien). Como mucho viñetas con "•".\n` +
       `- ACCIÓN DIRECTA (importante): cuando te pidan crear una etapa, agregar o marcar una actividad, consultar normativa, etc., LLAMA la herramienta correspondiente DE INMEDIATO en este mismo turno. NO propongas, NO pidas confirmación, NO preguntes "¿te gustaría incluir actividades?" — por WhatsApp el usuario quiere que lo hagas YA. Si faltan detalles, usa valores por defecto razonables (ej. 1-2 actividades lógicas). Ignora cualquier paso de "proponer y luego confirmar" de otros modos.\n` +
       `- FASE CORRECTA (crítico): al crear una etapa o actividad, identifica la FASE que menciona el usuario (demolicion, excavacion, construccion, acabados, administracion) y pásala EXACTA a la herramienta (parámetro "fase"). NUNCA asumas "demolicion" por defecto: si el usuario dice "excavación", créala en excavacion; si dice "acabados", en acabados. Respeta también el NOMBRE exacto que pidió el usuario para la etapa.\n` +
+      `- CREAR PROYECTO: si el usuario pide crear un PROYECTO/obra nuevo (ej. "crea el proyecto Torre Miraflores en San Isidro"), usa la herramienta crear_proyecto. El proyecto nuevo queda ACTIVO y los comandos siguientes trabajan sobre él.\n` +
       `- Si te preguntan "¿cómo va la obra?", por el avance o los pendientes, responde con los datos del ESTADO ACTUAL de arriba.\n` +
       `- CONSULTAS por trabajador o estado: si preguntan "¿qué actividades tiene [nombre]?" o por el estado de una etapa/actividad, responde usando las Actividades del ESTADO ACTUAL (cada una trae su estado y su "Responsable").\n` +
       `- FOTO → ACTUALIZAR: si te mandan una FOTO y piden actualizar el avance (ej. "actualiza la demolición según esta foto"), analiza qué actividades muestra la foto como TERMINADAS y márcalas con la herramienta actualizar_actividades usando sus NOMBRES EXACTOS del ESTADO ACTUAL. Confirma en pocas líneas qué marcaste como completado y qué queda pendiente.\n` +
@@ -1627,7 +1644,7 @@ export class ChatService {
     let text: string
     try {
       text = this.llm.isAgenticProvider()
-        ? await this.runAgenticLoop(messages, fakeRes, proyectoId)
+        ? await this.runAgenticLoop(messages, fakeRes, proyectoId, phone)
         : await this.llm.streamChat(messages, fakeRes)
     } catch (e: any) {
       this.logger.error(`WhatsApp loop error: ${e?.message}`)
@@ -1699,7 +1716,7 @@ export class ChatService {
 
   // ─── Agentic loop ────────────────────────────────────────────────────────────
 
-  private async runAgenticLoop(messages: LlmMessage[], res: Response, proyectoId: string): Promise<string> {
+  private async runAgenticLoop(messages: LlmMessage[], res: Response, proyectoId: string, phone?: string): Promise<string> {
     const MAX_ITERATIONS = 8
 
     for (let i = 0; i < MAX_ITERATIONS; i++) {
@@ -1719,7 +1736,7 @@ export class ChatService {
       })
 
       for (const tc of result.tool_calls) {
-        const toolResult = await this.executeTool(tc, res, proyectoId)
+        const toolResult = await this.executeTool(tc, res, proyectoId, phone)
         messages.push({
           role: 'tool',
           tool_call_id: tc.id,
@@ -1733,7 +1750,7 @@ export class ChatService {
     return fallback
   }
 
-  private async executeTool(tc: ToolCall, res: Response, proyectoId: string): Promise<any> {
+  private async executeTool(tc: ToolCall, res: Response, proyectoId: string, phone?: string): Promise<any> {
     const name = tc.function.name
     let args: Record<string, any>
 
@@ -1750,6 +1767,7 @@ export class ChatService {
     if (name === 'generar_plano') return this.toolGenerarPlano(args, res, proyectoId)
     if (name === 'ubicar_grua_en_plano') return this.toolUbicarGruaEnPlano(args, res, proyectoId)
     if (name === 'buscar_en_internet') return this.toolBuscarInternet(args.query, res)
+    if (name === 'crear_proyecto') return this.toolCrearProyecto(args, phone)
     if (name === 'generar_proyecto') return this.toolGenerarProyecto(args, res, proyectoId)
     if (name === 'crear_etapas') return this.toolCrearEtapas(args, res, proyectoId)
     if (name === 'consultar_documentos_requeridos') return this.toolConsultarDocumentosRequeridos(args, proyectoId)
@@ -1805,6 +1823,22 @@ export class ChatService {
     } catch (err: any) {
       this.logger.warn(`Web search error: ${err?.response?.data?.error?.message ?? err?.message}`)
       return { error: `Error en búsqueda web: ${err?.response?.data?.error?.message ?? err?.message}` }
+    }
+  }
+
+  /** Crea un proyecto nuevo (canal chat) y lo deja como el proyecto ACTIVO de ese número. */
+  private async toolCrearProyecto(args: Record<string, any>, phone?: string): Promise<any> {
+    const nombre = String(args.nombre ?? '').trim()
+    if (!nombre) return { error: 'Falta el nombre del proyecto.' }
+    const distrito = String(args.distrito ?? '').trim()
+    const owner = await this.proyectosService.duenoDe(process.env.WHATSAPP_DEMO_PROYECTO_ID || '')
+    if (!owner) return { error: 'No pude determinar un dueño válido para el proyecto.' }
+    const p = await this.proyectosService.create({ nombre, distrito: distrito || undefined } as any, owner)
+    if (phone) this.proyectoActivoChat.set(phone, p.id) // los próximos comandos trabajan sobre este proyecto
+    this.logger.log(`Bot creó proyecto "${nombre}" (${p.id}); activo para ${phone}`)
+    return {
+      ok: true, proyectoId: p.id, nombre: p.nombre, distrito: distrito || null,
+      mensaje: `Proyecto "${p.nombre}"${distrito ? ` (${distrito})` : ''} creado y activo. Los próximos comandos trabajarán sobre este proyecto.`,
     }
   }
 
