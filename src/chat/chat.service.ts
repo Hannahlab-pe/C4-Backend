@@ -22,6 +22,7 @@ import { ProyectosService } from '../proyectos/proyectos.service'
 import { FasesDetalleService } from '../fases-detalle/fases-detalle.service'
 import { RegistrosFaseService } from '../registros-fase/registros-fase.service'
 import { DocumentosRequeridosService } from '../documentos-requeridos/documentos-requeridos.service'
+import { PartidasCatalogoService } from '../partidas-catalogo/partidas-catalogo.service'
 import { RNE_CONTEXTO } from './rne-contexto'
 import { COSTOS_REVISTA } from './costos-revista'
 import { GRUAS_FICHAS_TECNICAS } from './gruas-fichas'
@@ -1215,6 +1216,39 @@ const C4_TOOLS: LlmTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'buscar_partidas',
+      description: 'Consulta la BIBLIOTECA MAESTRA de partidas de construcción (catálogo profesional de +8000 partidas WBS de proveedores). Úsala cuando el usuario pregunte "¿qué partidas/pasos tiene X?" (ej: "puerta contraplacada", "muro de drywall", "tarrajeo de muros", "piso de porcelanato") o quiera ver el desglose estándar de un elemento antes de agregarlo. Devuelve la secuencia de partidas con su unidad, especialidad, fase y control de calidad. NO crea nada — solo consulta.',
+      parameters: {
+        type: 'object',
+        properties: {
+          consulta: { type: 'string', description: 'Elemento o sistema a desglosar. Ej: "puerta contraplacada", "muro drywall", "tarrajeo de muros", "piso porcelanato".' },
+          fase: { type: 'string', description: 'Opcional. Filtra por fase del catálogo (ej: "Acabados", "Estructura", "Excavación").' },
+        },
+        required: ['consulta'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'agregar_partidas',
+      description: 'Toma las partidas estándar de la biblioteca maestra para un elemento (ej: "puerta contraplacada") y las AGREGA como actividades a una fase del proyecto, dentro de una etapa. Cada actividad queda con su unidad y observaciones (alcance + control de calidad) listas para asignar responsable y metrar. Úsala cuando el usuario diga "agrega las partidas de X", "mete esos pasos a la etapa Y", "arma las actividades de puerta contraplacada en acabados". Llama SOLO cuando el usuario lo pida. Por defecto AÑADE (no reemplaza).',
+      parameters: {
+        type: 'object',
+        properties: {
+          fase: { type: 'string', description: 'Slug de la fase del proyecto: demolicion | excavacion | construccion | acabados | administracion' },
+          consulta: { type: 'string', description: 'Elemento a desglosar en partidas. Ej: "puerta contraplacada", "muro de drywall".' },
+          etapa: { type: 'string', description: 'Opcional. Nombre o key de la etapa destino (ej: "Acabados secos"). Si se omite, se agregan a la fase sin etapa específica.' },
+          solo_codigos: { type: 'array', items: { type: 'string' }, description: 'Opcional. Códigos WBS específicos a agregar (ej: ["16.01.005","16.01.007"]) si el usuario eligió solo algunos. Si se omite, agrega todas las partidas del elemento.' },
+          responsable: { type: 'string', description: 'Opcional. Nombre del miembro del equipo responsable de estas partidas.' },
+        },
+        required: ['fase', 'consulta'],
+      },
+    },
+  },
 ]
 
 // Plantilla de etapas por fase (keys = las que usan los registros de generar_proyecto).
@@ -1280,6 +1314,7 @@ export class ChatService {
     private fasesDetalle: FasesDetalleService,
     private registrosFase: RegistrosFaseService,
     private documentosRequeridos: DocumentosRequeridosService,
+    private partidasCatalogo: PartidasCatalogoService,
   ) {}
 
   getAnalisis(proyectoId: string): any | undefined {
@@ -1779,6 +1814,8 @@ export class ChatService {
     if (name === 'crear_vaciados') return this.toolCrearVaciados(args, res, proyectoId)
     if (name === 'actualizar_actividades') return this.toolActualizarActividades(args, res, proyectoId)
     if (name === 'crear_productividad') return this.toolCrearProductividad(args, res, proyectoId)
+    if (name === 'buscar_partidas') return this.toolBuscarPartidas(args)
+    if (name === 'agregar_partidas') return this.toolAgregarPartidas(args, res, proyectoId)
 
     return { error: `Tool desconocida: ${name}` }
   }
@@ -2437,6 +2474,94 @@ export class ChatService {
     } catch (err: any) {
       this.logger.error('Error actualizando actividades:', err?.message)
       return { error: `Error actualizando actividades: ${err?.message}` }
+    }
+  }
+
+  /** Consulta la biblioteca maestra de partidas (solo lectura). */
+  private async toolBuscarPartidas(args: Record<string, any>): Promise<any> {
+    const consulta = String(args.consulta ?? '').trim()
+    if (!consulta) return { error: 'Falta la consulta (ej: "puerta contraplacada").' }
+    const fase = args.fase ? String(args.fase) : undefined
+    const partidas = await this.partidasCatalogo.buscar(consulta, { fase, limit: 30 })
+    if (!partidas.length) return { encontradas: 0, mensaje: `No encontré partidas para "${consulta}" en el catálogo maestro.` }
+    return {
+      encontradas: partidas.length,
+      consulta,
+      partidas: partidas.map((p) => ({
+        codigo: p.codigo,
+        partida: p.partida,
+        unidad: p.unidad,
+        fase: p.fase,
+        especialidad: p.especialidad,
+        control: p.control || undefined,
+      })),
+      mensaje: `Encontré ${partidas.length} partidas para "${consulta}". Enumera al usuario las partidas (nombre + unidad) de forma breve y ofrécele agregarlas como actividades (con agregar_partidas).`,
+    }
+  }
+
+  /** Toma partidas del catálogo maestro y las agrega como actividades de una fase. */
+  private async toolAgregarPartidas(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const FASES = ['demolicion', 'excavacion', 'construccion', 'acabados', 'administracion']
+    const fase = String(args.fase ?? '').trim().toLowerCase()
+    if (!FASES.includes(fase)) return { error: 'Fase inválida. Usa: ' + FASES.join(', ') }
+    const consulta = String(args.consulta ?? '').trim()
+    if (!consulta) return { error: 'Falta la consulta (elemento a desglosar en partidas).' }
+
+    let partidas = await this.partidasCatalogo.buscar(consulta, { limit: 40 })
+    if (Array.isArray(args.solo_codigos) && args.solo_codigos.length) {
+      const cods = args.solo_codigos.map((c: any) => String(c).trim())
+      partidas = partidas.filter((p) => cods.includes(p.codigo))
+    }
+    if (!partidas.length) return { error: `No encontré partidas para "${consulta}" en el catálogo maestro.` }
+
+    // Resolver la etapa destino (key) si el usuario la indicó
+    const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
+    let etapaKey = ''
+    let etapaNombre = ''
+    if (args.etapa) {
+      const det = await this.fasesDetalle.obtener(proyectoId, `${fase}__etapas`)
+      const etapas: any[] = Array.isArray(det?.datos?.etapas) ? det!.datos.etapas : []
+      const t = norm(String(args.etapa))
+      const et = etapas.find((e) => norm(e.key) === t || norm(e.nombre) === t || norm(e.nombre).includes(t) || t.includes(norm(e.nombre)))
+      if (et) { etapaKey = et.key; etapaNombre = et.nombre }
+      else etapaKey = String(args.etapa)
+    }
+
+    const INIT_ESTADO: Record<string, string> = {
+      demolicion: 'Planificada', excavacion: 'Planificada', construccion: 'Programado',
+      acabados: 'En acabados', administracion: 'Por iniciar',
+    }
+    const responsable = args.responsable ? String(args.responsable).trim() : ''
+    try {
+      res.write(`event:status\ndata:${JSON.stringify({ step: `Agregando ${partidas.length} partidas...`, icon: 'check' })}\n\n`)
+      for (const p of partidas) {
+        const obs = [p.alcance, p.control ? `Control: ${p.control}` : ''].filter(Boolean).join(' · ')
+        await this.registrosFase.crear(proyectoId, fase, {
+          nombre: p.partida,
+          estado: INIT_ESTADO[fase] ?? '',
+          datos: {
+            etapa: etapaKey || undefined,
+            codigoPartida: p.codigo,
+            unidad: p.unidad,
+            especialidad: p.especialidad || undefined,
+            observaciones: obs || undefined,
+            responsable: responsable || undefined,
+          },
+        })
+      }
+      res.write(`event:etapas_creadas\ndata:${JSON.stringify({ fase })}\n\n`)
+      this.logger.log(`Partidas agregadas a ${fase} de ${proyectoId}: ${partidas.length} ("${consulta}")`)
+      return {
+        ok: true,
+        fase,
+        etapa: etapaNombre || args.etapa || undefined,
+        agregadas: partidas.length,
+        partidas: partidas.map((p) => `${p.partida} (${p.unidad})`),
+        mensaje: `Agregué ${partidas.length} partidas de "${consulta}" como actividades${etapaNombre ? ` en la etapa ${etapaNombre}` : ''}${responsable ? `, responsable ${responsable}` : ''}. Ya aparecen en el módulo de ${fase}. Confírmaselo al usuario de forma breve.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error agregando partidas:', err?.message)
+      return { error: `Error agregando partidas: ${err?.message}` }
     }
   }
 

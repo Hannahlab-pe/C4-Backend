@@ -19,6 +19,7 @@ import { ExcavacionRegistrosModule } from './excavacion-registros/excavacion-reg
 import { FasesDetalleModule } from './fases-detalle/fases-detalle.module'
 import { RegistrosFaseModule } from './registros-fase/registros-fase.module'
 import { DocumentosRequeridosModule } from './documentos-requeridos/documentos-requeridos.module'
+import { PartidasCatalogoModule } from './partidas-catalogo/partidas-catalogo.module'
 
 import { Usuario } from './entities/usuario.entity'
 import { Proyecto } from './entities/proyecto.entity'
@@ -43,13 +44,14 @@ import { ExcavacionRegistro } from './entities/excavacion-registro.entity'
 import { FaseDetalle } from './entities/fase-detalle.entity'
 import { RegistroFase } from './entities/registro-fase.entity'
 import { DocumentoRequerido } from './entities/documento-requerido.entity'
+import { PartidaCatalogo } from './entities/partida-catalogo.entity'
 
 const entities = [
   Usuario, Proyecto, ProyectoUsuario, Sesion, Mensaje,
   Terreno, Excavacion, Construccion, Acabados, Administracion,
   GanttFase, Normativa, NormativaEmbedding, Documento, KnowledgeBaseChunk,
   AnalisisProyecto, TareaFase, ContrataFase, EquipoFase, ExcavacionRegistro,
-  FaseDetalle, RegistroFase, DocumentoRequerido,
+  FaseDetalle, RegistroFase, DocumentoRequerido, PartidaCatalogo,
 ]
 
 @Module({
@@ -86,6 +88,7 @@ const entities = [
     FasesDetalleModule,
     RegistrosFaseModule,
     DocumentosRequeridosModule,
+    PartidasCatalogoModule,
   ],
   controllers: [AppController],
   providers: [AppService, SeedService],

@@ -20,6 +20,7 @@ import { ProyectosModule } from '../proyectos/proyectos.module'
 import { FasesDetalleModule } from '../fases-detalle/fases-detalle.module'
 import { RegistrosFaseModule } from '../registros-fase/registros-fase.module'
 import { DocumentosRequeridosModule } from '../documentos-requeridos/documentos-requeridos.module'
+import { PartidasCatalogoModule } from '../partidas-catalogo/partidas-catalogo.module'
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { DocumentosRequeridosModule } from '../documentos-requeridos/documentos-
     FasesDetalleModule,
     RegistrosFaseModule,
     DocumentosRequeridosModule,
+    PartidasCatalogoModule,
   ],
   controllers: [ChatController, WhatsappController, TelegramController],
   providers: [ChatService, LlmService, PdfService, TelegramService],
