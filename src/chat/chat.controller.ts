@@ -123,6 +123,15 @@ export class ChatController {
     res.send(buffer)
   }
 
+  @Get('reporte-obra/:proyectoId')
+  async downloadReporteObra(@Param('proyectoId') proyectoId: string, @Res() res: Response) {
+    const data = await this.chat.reporteObraData(proyectoId)
+    const buffer = await this.pdfService.generarReporteObra(data)
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `attachment; filename="reporte-obra-${proyectoId.slice(0, 8)}.pdf"`)
+    res.send(buffer)
+  }
+
   @Get('planos/:proyectoId')
   getPlanos(@Param('proyectoId') proyectoId: string) {
     return this.chat.getPlanosList(proyectoId)

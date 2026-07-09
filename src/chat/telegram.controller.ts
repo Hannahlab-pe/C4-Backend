@@ -76,6 +76,9 @@ export class TelegramController {
         imageBase64, imageMime, audioBase64, audioMime, pdfBase64, pdfName,
       })
       await this.tg.sendMessage(chatId, response)
+      // Si la IA generó un documento (reporte de obra), enviarlo como adjunto.
+      const doc = this.chat.takePendingDoc(String(chatId))
+      if (doc) await this.tg.sendDocument(chatId, doc.buffer, doc.filename, doc.caption)
     } catch {
       await this.tg.sendMessage(chatId, 'Tuve un problema procesando tu mensaje. Intenta de nuevo. 🙏')
     }

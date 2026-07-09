@@ -44,7 +44,12 @@ export class WhatsappController {
           pdfBase64: body?.pdf_base64, pdfName: body?.pdf_name,
         },
       )
-      return { response, status: 'success' }
+      // Si la IA generó un documento (reporte de obra), lo devolvemos en base64 para que el bridge lo envíe.
+      const doc = this.chat.takePendingDoc(body?.user_id ?? 'anon')
+      return {
+        response, status: 'success',
+        ...(doc ? { document_base64: doc.buffer.toString('base64'), document_name: doc.filename } : {}),
+      }
     } catch {
       return { response: 'Hubo un error procesando tu mensaje. Intenta de nuevo.', status: 'error' }
     }

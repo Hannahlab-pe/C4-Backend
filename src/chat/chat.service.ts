@@ -714,6 +714,14 @@ const C4_TOOLS: LlmTool[] = [
   {
     type: 'function',
     function: {
+      name: 'generar_reporte_obra',
+      description: 'Genera y ENVÍA un REPORTE DE OBRA en PDF: avance por fase, seguridad (RNE G.050), calidad (protocolos liberados y no conformidades). Úsala cuando el usuario pida "mándame el reporte de la obra", "genera el informe de avance", "un reporte para gerencia/cliente". Por Telegram se envía como documento adjunto.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'consultar_normativa',
       description:
         'Consulta los parámetros urbanísticos oficiales de un distrito de Lima: zonificación, pisos máximos, retiros (frontal/lateral/posterior), CUS, área mínima de departamento, ratio estacionamientos. Siempre llamar antes de analisis_completo.',
@@ -1425,6 +1433,14 @@ export class ChatService {
   private readonly planoPorProyecto    = new Map<string, Buffer>()
   private readonly whatsappHist        = new Map<string, LlmMessage[]>() // memoria por número (canal WhatsApp)
   private readonly proyectoActivoChat  = new Map<string, string>()       // número → proyecto activo (canal chat)
+  private readonly pendingDocs         = new Map<string, { buffer: Buffer; filename: string; caption?: string }>() // PDF por enviar (canal chat)
+
+  /** El controller (Telegram/WhatsApp) toma el documento pendiente de un chat para enviarlo. */
+  takePendingDoc(phone: string): { buffer: Buffer; filename: string; caption?: string } | undefined {
+    const d = this.pendingDocs.get(phone)
+    if (d) this.pendingDocs.delete(phone)
+    return d
+  }
 
   constructor(
     @InjectRepository(Sesion) private sesionRepo: Repository<Sesion>,
@@ -1744,6 +1760,54 @@ export class ChatService {
     return `\n\n---\n## ESTADO ACTUAL DEL PROYECTO (úsalo si preguntan por el avance o los pendientes)\n${partes.join('\n')}\n`
   }
 
+  /** Junta el estado del proyecto (avance por fase + seguridad + calidad) para el reporte PDF. */
+  async reporteObraData(proyectoId: string): Promise<{
+    nombre: string; distrito: string; avanceGlobal: number
+    fases: { label: string; avance: number; completadas: number; total: number }[]
+    seguridad: { cumplimiento: number; total: number; criticosPendientes: string[] } | null
+    calidad: { liberado: number; protocolos: number; ncAbiertas: number; ncs: { descripcion: string; severidad: string; estado: string }[] } | null
+  }> {
+    const FASES = [
+      { key: 'demolicion', label: 'Demolición' }, { key: 'excavacion', label: 'Excavación' },
+      { key: 'construccion', label: 'Construcción' }, { key: 'acabados', label: 'Acabados' },
+      { key: 'administracion', label: 'Administración' },
+    ]
+    const FINALES = ['Completada', 'Terminado', 'Entregado', 'Aprobado']
+    const proy: any = await this.proyectosService.findOne(proyectoId).catch(() => null)
+
+    const fases: { label: string; avance: number; completadas: number; total: number }[] = []
+    let totalComp = 0, totalAct = 0
+    let segAplica = 0, segCumple = 0; const segCriticos: string[] = []
+    let calProto = 0, calLib = 0, calNcAbiertas = 0; const calNcs: { descripcion: string; severidad: string; estado: string }[] = []
+
+    for (const f of FASES) {
+      const regs: any[] = await this.registrosFase.listar(proyectoId, f.key).catch(() => [])
+      const comp = regs.filter((r) => FINALES.includes(r.estado)).length
+      if (regs.length) { fases.push({ label: f.label, avance: Math.round((comp / regs.length) * 100), completadas: comp, total: regs.length }); totalComp += comp; totalAct += regs.length }
+
+      const seg = await this.fasesDetalle.obtener(proyectoId, `${f.key}__seguridad`).catch(() => null)
+      const chk: any[] = Array.isArray(seg?.datos?.checklist) ? seg!.datos.checklist : []
+      const aplica = chk.filter((c) => c.estado !== 'no_aplica')
+      segAplica += aplica.length; segCumple += aplica.filter((c) => c.estado === 'cumple').length
+      chk.filter((c) => c.critico && c.estado !== 'cumple' && c.estado !== 'no_aplica').forEach((c) => segCriticos.push(`${f.label}: ${c.item}`))
+
+      const cal = await this.fasesDetalle.obtener(proyectoId, `${f.key}__calidad`).catch(() => null)
+      const protos: any[] = Array.isArray(cal?.datos?.protocolos) ? cal!.datos.protocolos : []
+      const ncs: any[] = Array.isArray(cal?.datos?.noConformidades) ? cal!.datos.noConformidades : []
+      calProto += protos.length; calLib += protos.filter((p) => p.estado === 'liberado').length
+      ncs.forEach((n) => { if (n.estado === 'abierta') calNcAbiertas++; calNcs.push({ descripcion: `${f.label}: ${n.descripcion}`, severidad: n.severidad, estado: n.estado === 'abierta' ? 'Abierta' : 'Cerrada' }) })
+    }
+
+    return {
+      nombre: proy?.nombre ?? 'Proyecto',
+      distrito: proy?.distrito ?? '',
+      avanceGlobal: totalAct ? Math.round((totalComp / totalAct) * 100) : 0,
+      fases,
+      seguridad: segAplica ? { cumplimiento: Math.round((segCumple / segAplica) * 100), total: segAplica, criticosPendientes: segCriticos } : null,
+      calidad: (calProto || calNcs.length) ? { liberado: calProto ? Math.round((calLib / calProto) * 100) : 0, protocolos: calProto, ncAbiertas: calNcAbiertas, ncs: calNcs } : null,
+    }
+  }
+
   /**
    * Responde un mensaje de WhatsApp (texto → texto, sin streaming) reusando el
    * agente completo sobre el proyecto demo. El `res` es un objeto fantasma que
@@ -1986,6 +2050,7 @@ export class ChatService {
     if (name === 'consultar_normativa') return this.toolConsultarNormativa(args.distrito, res)
     if (name === 'analisis_completo') return this.toolAnalisisCompleto(args, res, proyectoId)
     if (name === 'generar_pdf') return this.toolGenerarPdf(args, res, proyectoId)
+    if (name === 'generar_reporte_obra') return this.toolGenerarReporteObra(res, proyectoId, phone)
     if (name === 'generar_plano') return this.toolGenerarPlano(args, res, proyectoId)
     if (name === 'ubicar_grua_en_plano') return this.toolUbicarGruaEnPlano(args, res, proyectoId)
     if (name === 'buscar_en_internet') return this.toolBuscarInternet(args.query, res)
@@ -3301,6 +3366,26 @@ export class ChatService {
     } catch (err: any) {
       this.logger.error('Error generando PDF:', err?.message)
       return { error: `Error al generar PDF: ${err?.message}` }
+    }
+  }
+
+  /** Genera el REPORTE DE OBRA en PDF. En el chat (Telegram) lo deja listo como adjunto; en web emite el link. */
+  private async toolGenerarReporteObra(res: Response, proyectoId: string, phone?: string): Promise<any> {
+    try {
+      const data = await this.reporteObraData(proyectoId)
+      const buffer = await this.pdfService.generarReporteObra(data)
+      const slug = (data.nombre || 'proyecto').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'obra'
+      const filename = `reporte-obra-${slug}.pdf`
+      if (phone) {
+        this.pendingDocs.set(phone, { buffer, filename, caption: `Reporte de obra · ${data.nombre} · avance ${data.avanceGlobal}%` })
+        this.logger.log(`Reporte de obra listo para ${phone}: ${data.nombre} (${Math.round(buffer.length / 1024)} KB)`)
+        return { ok: true, enviado: true, avance: data.avanceGlobal, mensaje: `Generé el reporte de obra de "${data.nombre}" (avance ${data.avanceGlobal}%). Te lo envío como PDF adjunto en este chat. Confírmaselo al usuario en 1 línea.` }
+      }
+      res.write(`event:pdf_ready\ndata:${JSON.stringify({ url: `/api/chat/reporte-obra/${proyectoId}` })}\n\n`)
+      return { ok: true, avance: data.avanceGlobal, mensaje: 'Reporte de obra generado. El usuario lo descarga desde el botón que aparece en el chat.' }
+    } catch (err: any) {
+      this.logger.error('Error generando reporte de obra:', err?.message)
+      return { error: `No pude generar el reporte de obra: ${err?.message}` }
     }
   }
 

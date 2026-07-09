@@ -22,6 +22,26 @@ export class TelegramService {
     }
   }
 
+  /** Envía un documento (PDF) como adjunto de Telegram. */
+  async sendDocument(chatId: number | string, buffer: Buffer, filename: string, caption?: string): Promise<boolean> {
+    if (!this.token) return false
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const FormData = require('form-data')
+      const form = new FormData()
+      form.append('chat_id', String(chatId))
+      if (caption) form.append('caption', caption.slice(0, 1000))
+      form.append('document', buffer, { filename, contentType: 'application/pdf' })
+      await axios.post(`${this.api()}/sendDocument`, form, {
+        headers: form.getHeaders(), timeout: 30_000, maxBodyLength: Infinity, maxContentLength: Infinity,
+      })
+      return true
+    } catch (e: any) {
+      this.logger.error(`Telegram sendDocument falló: ${e?.response?.data?.description ?? e?.message}`)
+      return false
+    }
+  }
+
   /** Baja un archivo de Telegram (foto/voz) por su file_id y lo devuelve en base64. Reintenta ante fallos transitorios. */
   async getFileBase64(fileId: string): Promise<string | null> {
     if (!this.token) { this.logger.error('Telegram getFile: falta TELEGRAM_BOT_TOKEN'); return null }

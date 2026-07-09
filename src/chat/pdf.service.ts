@@ -186,4 +186,103 @@ export class PdfService {
   private fmt(n: number, decimals = 0): string {
     return n.toLocaleString('es-PE', { maximumFractionDigits: decimals })
   }
+
+  // ─── Reporte de obra ─────────────────────────────────────────────────────────
+  async generarReporteObra(data: {
+    nombre: string
+    distrito: string
+    avanceGlobal: number
+    fases: { label: string; avance: number; completadas: number; total: number }[]
+    seguridad: { cumplimiento: number; total: number; criticosPendientes: string[] } | null
+    calidad: { liberado: number; protocolos: number; ncAbiertas: number; ncs: { descripcion: string; severidad: string; estado: string }[] } | null
+  }): Promise<Buffer> {
+    return new Promise((resolve) => {
+      const doc = new PDFDocument({ margin: 50, size: 'A4' })
+      const chunks: Buffer[] = []
+      doc.on('data', (c: Buffer) => chunks.push(c))
+      doc.on('end', () => resolve(Buffer.concat(chunks)))
+      const W = doc.page.width - 100
+      const AMBER = '#D97706', RED = '#DC2626'
+
+      // Encabezado
+      doc.rect(50, 45, W, 60).fill(BLUE)
+      doc.fontSize(18).font('Helvetica-Bold').fillColor('white').text('C4 — REPORTE DE OBRA', 65, 60, { width: W - 30 })
+      doc.fontSize(10).font('Helvetica').fillColor('white')
+        .text(`${data.nombre}  ·  ${data.distrito || 'Lima'}  ·  ${new Date().toLocaleDateString('es-PE', { day: '2-digit', month: 'long', year: 'numeric' })}`, 65, 83, { width: W - 30 })
+      doc.moveDown(4)
+
+      this.highlight(doc, W, `Avance global de la obra: ${data.avanceGlobal}%`, data.avanceGlobal >= 66 ? GREEN : data.avanceGlobal >= 33 ? AMBER : RED)
+      doc.moveDown(0.3)
+
+      // 1. Avance por fase
+      this.sectionTitle(doc, '1. AVANCE POR FASE', W)
+      if (data.fases.length) {
+        this.tabla(doc, W, ['Fase', 'Avance', 'Actividades'],
+          data.fases.map((f) => [f.label, `${f.avance}%`, `${f.completadas}/${f.total}`]), ['left', 'right', 'right'])
+      } else {
+        doc.fontSize(8).font('Helvetica').fillColor(GRAY).text('Aún no hay actividades registradas.', 58, doc.y); doc.moveDown(1)
+      }
+      doc.moveDown(0.4)
+
+      // 2. Seguridad
+      this.sectionTitle(doc, '2. SEGURIDAD (RNE G.050)', W)
+      if (data.seguridad && data.seguridad.total > 0) {
+        this.highlight(doc, W, `Cumplimiento de seguridad: ${data.seguridad.cumplimiento}%`,
+          data.seguridad.cumplimiento >= 80 ? GREEN : data.seguridad.cumplimiento >= 50 ? AMBER : RED)
+        if (data.seguridad.criticosPendientes.length) {
+          doc.fontSize(8).font('Helvetica-Bold').fillColor(RED).text('Ítems críticos pendientes:', 58, doc.y, { width: W - 16 }); doc.moveDown(0.2)
+          data.seguridad.criticosPendientes.slice(0, 8).forEach((it) => {
+            doc.fontSize(8).font('Helvetica').fillColor(DARK).text(`•  ${it}`, 62, doc.y, { width: W - 24, lineBreak: false, ellipsis: true, height: 10 }); doc.moveDown(0.25)
+          })
+        } else {
+          doc.fontSize(8).font('Helvetica').fillColor(GREEN).text('Sin ítems críticos pendientes.', 58, doc.y)
+        }
+      } else {
+        doc.fontSize(8).font('Helvetica').fillColor(GRAY).text('Sin checklist de seguridad registrado aún.', 58, doc.y)
+      }
+      doc.moveDown(0.9)
+
+      // 3. Calidad
+      this.sectionTitle(doc, '3. CALIDAD (protocolos y no conformidades)', W)
+      if (data.calidad && (data.calidad.protocolos > 0 || data.calidad.ncs.length)) {
+        this.highlight(doc, W, `Protocolos liberados: ${data.calidad.liberado}%   ·   No conformidades abiertas: ${data.calidad.ncAbiertas}`,
+          data.calidad.ncAbiertas > 0 ? AMBER : GREEN)
+        if (data.calidad.ncs.length) {
+          this.tabla(doc, W, ['No conformidad', 'Severidad', 'Estado'],
+            data.calidad.ncs.slice(0, 10).map((n) => [n.descripcion, n.severidad, n.estado]), ['left', 'right', 'right'])
+        }
+      } else {
+        doc.fontSize(8).font('Helvetica').fillColor(GRAY).text('Sin plan de calidad registrado aún.', 58, doc.y)
+      }
+
+      const pageH = doc.page.height
+      doc.fontSize(7).font('Helvetica').fillColor(GRAY)
+        .text('Reporte generado por C4 · Gestión de Obras · Documento referencial del avance a la fecha.', 50, pageH - 40, { width: W, align: 'center' })
+      doc.end()
+    })
+  }
+
+  /** Tabla genérica: primera columna ancha, resto a la derecha. */
+  private tabla(doc: any, W: number, headers: string[], rows: (string | number)[][], aligns: ('left' | 'right')[]) {
+    const cols = headers.length
+    const firstW = cols >= 3 ? W * 0.56 : W / cols
+    const restW = (W - firstW) / (cols - 1)
+    const colX = (i: number) => (i === 0 ? 50 : 50 + firstW + (i - 1) * restW)
+    const colW = (i: number) => (i === 0 ? firstW : restW)
+    const startY = doc.y
+    headers.forEach((h, i) => {
+      doc.rect(colX(i), startY, colW(i), 15).fill(DARK)
+      doc.fontSize(7).font('Helvetica-Bold').fillColor('white').text(h, colX(i) + 4, startY + 4.5, { width: colW(i) - 8, align: aligns[i] })
+    })
+    let y = startY + 15
+    rows.forEach((r, idx) => {
+      doc.rect(50, y, W, 14).fill(idx % 2 === 0 ? LIGHT : 'white')
+      r.forEach((val, i) => {
+        doc.fontSize(7).font('Helvetica').fillColor(DARK)
+          .text(String(val), colX(i) + 4, y + 3.8, { width: colW(i) - 8, align: aligns[i], lineBreak: false, ellipsis: true, height: 10 })
+      })
+      y += 14
+    })
+    doc.y = y + 6
+  }
 }
