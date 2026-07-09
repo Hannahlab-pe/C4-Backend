@@ -67,7 +67,7 @@ REGLAS PARA INTERNET (fuente de último recurso, pero úsala sin miedo cuando ap
 - Si el usuario pide links o "el paso a paso" de un trámite, busca en internet y entrega los links oficiales (municipalidad, SUNARP, etc.).
 
 PROHIBIDO usar tu conocimiento de entrenamiento para responder preguntas técnicas, normativas, de procedimientos, precios o especificaciones. Si la respuesta no está en las fuentes 1–5, BUSCA EN INTERNET antes de rendirte. Solo si tampoco está en internet, di:
-"No encontré esa información en los documentos disponibles ni en fuentes públicas. Si tienes la norma o manual correspondiente, puedes subirlo al proyecto."
+"No encontré esa información en los documentos disponibles ni en fuentes públicas. Si   tienes la norma o manual correspondiente, puedes subirlo al proyecto."
 
 CÓMO COMBINAR FUENTES:
 Puedes y debes cruzar datos de varias fuentes en la misma respuesta. Cita siempre el origen de cada dato:
@@ -1249,6 +1249,36 @@ const C4_TOOLS: LlmTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'consultar_checklist_seguridad',
+      description: 'Consulta el CHECKLIST DE SEGURIDAD (RNE G.050) de una fase: lista sus ítems y el estado de cada uno (cumplido / pendiente / no aplica). Úsala cuando el usuario pregunte por el checklist de seguridad, o ANTES de marcar un ítem para analizar cuál coincide con lo que pide. Si no sabes a qué fase se refiere, llámala SIN fase: te dirá qué fases tienen checklist para que le preguntes al usuario.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fase: { type: 'string', description: 'Opcional. Fase: demolicion | excavacion | construccion | acabados | administracion. Si se omite, devuelve qué fases tienen checklist.' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'marcar_checklist_seguridad',
+      description: 'Marca un ítem del CHECKLIST DE SEGURIDAD de una fase como cumplido (o pendiente / no aplica / eliminar). Úsala cuando el usuario diga "marca como completado tal ítem de seguridad", "tacha X del checklist", "ya cumplimos con Y". Hace matching DIFUSO por el texto del ítem: si hay varios parecidos devuelve los candidatos para que le confirmes al usuario a cuál se refiere; si no encuentra ninguno, devuelve la lista de ítems disponibles. Requiere la fase — si no la sabes, primero usa consultar_checklist_seguridad o pregúntale al usuario.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fase: { type: 'string', description: 'Fase del checklist: demolicion | excavacion | construccion | acabados | administracion' },
+          item: { type: 'string', description: 'Texto (o parte) del ítem a marcar. Ej: "EPP", "charla de seguridad", "plan de emergencias".' },
+          estado: { type: 'string', description: 'Qué hacer: "cumple" (completado, por defecto) | "pendiente" (desmarcar) | "no_aplica" | "eliminar".' },
+        },
+        required: ['fase', 'item'],
+      },
+    },
+  },
 ]
 
 // Plantilla de etapas por fase (keys = las que usan los registros de generar_proyecto).
@@ -1642,6 +1672,7 @@ export class ChatService {
       `- FOTO → ACTUALIZAR: si te mandan una FOTO y piden actualizar el avance (ej. "actualiza la demolición según esta foto"), analiza qué actividades muestra la foto como TERMINADAS y márcalas con la herramienta actualizar_actividades usando sus NOMBRES EXACTOS del ESTADO ACTUAL. Confirma en pocas líneas qué marcaste como completado y qué queda pendiente.\n` +
       `- El ESTADO ACTUAL de arriba es la VERDAD del proyecto AHORA MISMO. NO menciones etapas ni actividades que no estén ahí, aunque en la conversación previa parezca que las creaste (pueden haberse borrado). Nunca digas "completé todas las etapas" salvo que el ESTADO ACTUAL lo muestre al 100%.\n` +
       `- FIABILIDAD: como SIEMPRE ejecutas la herramienta para las acciones, confirma en una línea SOLO lo que la tool realmente hizo. Nunca afirmes una acción (crear etapa, marcar actividad) sin haber llamado la herramienta.\n` +
+      `- CHECKLIST DE SEGURIDAD: para marcar/tachar ítems del checklist de seguridad usa marcar_checklist_seguridad; para verlos, consultar_checklist_seguridad. EXCEPCIÓN a la acción directa: si la herramienta responde "necesita_fase", "ambiguo" o con "candidatos", NO elijas tú — muéstrale al usuario esas opciones (las fases o el texto exacto de los ítems parecidos) y pregúntale a CUÁL se refiere; recién cuando te confirme, márcalo. Si no encuentra el ítem, dile brevemente cuáles hay.\n` +
       `- Si el resultado es largo (un análisis), resume lo clave (TIR, N° de deptos, etc.) en pocas líneas.`
     const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + estadoProyecto + notaWhatsapp
 
@@ -1816,6 +1847,8 @@ export class ChatService {
     if (name === 'crear_productividad') return this.toolCrearProductividad(args, res, proyectoId)
     if (name === 'buscar_partidas') return this.toolBuscarPartidas(args)
     if (name === 'agregar_partidas') return this.toolAgregarPartidas(args, res, proyectoId)
+    if (name === 'consultar_checklist_seguridad') return this.toolConsultarChecklistSeguridad(args, proyectoId)
+    if (name === 'marcar_checklist_seguridad') return this.toolMarcarChecklistSeguridad(args, res, proyectoId)
 
     return { error: `Tool desconocida: ${name}` }
   }
@@ -2562,6 +2595,123 @@ export class ChatService {
     } catch (err: any) {
       this.logger.error('Error agregando partidas:', err?.message)
       return { error: `Error agregando partidas: ${err?.message}` }
+    }
+  }
+
+  // ── Checklist de seguridad (RNE G.050): consultar + marcar desde la IA ──
+  private readonly FASES_SEG = ['demolicion', 'excavacion', 'construccion', 'acabados', 'administracion']
+  private normSeg = (s: string) => String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
+
+  private resolverFaseSeg(faseArg: string): string {
+    const a = this.normSeg(faseArg)
+    if (!a) return ''
+    if (this.FASES_SEG.includes(a)) return a
+    return this.FASES_SEG.find((f) => this.normSeg(f).includes(a) || a.includes(this.normSeg(f))) ?? ''
+  }
+
+  private async toolConsultarChecklistSeguridad(args: Record<string, any>, proyectoId: string): Promise<any> {
+    const fase = this.resolverFaseSeg(String(args.fase ?? ''))
+    const ESTADO_TXT: Record<string, string> = { cumple: 'cumplido', pendiente: 'pendiente', no_aplica: 'no aplica' }
+
+    if (!fase) {
+      const disponibles: any[] = []
+      for (const f of this.FASES_SEG) {
+        const det = await this.fasesDetalle.obtener(proyectoId, `${f}__seguridad`)
+        const cl: any[] = Array.isArray(det?.datos?.checklist) ? det!.datos.checklist : []
+        if (cl.length) disponibles.push({ fase: f, items: cl.length, cumplidos: cl.filter((c) => c.estado === 'cumple').length })
+      }
+      if (!disponibles.length) return { hay_checklist: false, mensaje: 'Ninguna fase tiene checklist de seguridad todavía.' }
+      return {
+        necesita_fase: true,
+        fases_con_checklist: disponibles,
+        mensaje: 'Hay checklist de seguridad en más de una fase. Pregúntale al usuario a qué fase se refiere antes de marcar.',
+      }
+    }
+
+    const det = await this.fasesDetalle.obtener(proyectoId, `${fase}__seguridad`)
+    const checklist: any[] = Array.isArray(det?.datos?.checklist) ? det!.datos.checklist : []
+    if (!checklist.length) return { fase, hay_checklist: false, mensaje: `La fase ${fase} no tiene checklist de seguridad.` }
+    return {
+      fase,
+      total: checklist.length,
+      cumplidos: checklist.filter((c) => c.estado === 'cumple').length,
+      items: checklist.map((c) => ({ item: c.item, estado: ESTADO_TXT[c.estado] ?? c.estado, critico: !!c.critico })),
+      mensaje: `Checklist de seguridad de ${fase}. Enuméraselos brevemente al usuario con su estado. Para marcar uno usa marcar_checklist_seguridad.`,
+    }
+  }
+
+  private async toolMarcarChecklistSeguridad(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const fase = this.resolverFaseSeg(String(args.fase ?? ''))
+    if (!fase) return { necesita_fase: true, error: 'Falta la fase. Pregúntale al usuario a qué fase pertenece el checklist (demolición, excavación, etc.) o usa consultar_checklist_seguridad.' }
+
+    const itemQuery = String(args.item ?? '').trim()
+    if (!itemQuery) return { error: 'Falta indicar qué ítem del checklist marcar.' }
+
+    let estado = this.normSeg(String(args.estado ?? 'cumple'))
+    if (/complet|cumpl|hecho|listo|\bok\b|tach|termin|si\b/.test(estado)) estado = 'cumple'
+    else if (/pend|desmarc|revert|no hecho|falta/.test(estado)) estado = 'pendiente'
+    else if (/no.?aplic|n\/?a|descart/.test(estado)) estado = 'no_aplica'
+    else if (/elimin|borra|quita/.test(estado)) estado = 'eliminar'
+    if (!['cumple', 'pendiente', 'no_aplica', 'eliminar'].includes(estado)) estado = 'cumple'
+
+    const key = `${fase}__seguridad`
+    const det = await this.fasesDetalle.obtener(proyectoId, key)
+    const prev: any = det?.datos ?? {}
+    const checklist: any[] = Array.isArray(prev.checklist) ? prev.checklist : []
+    if (!checklist.length) return { error: `La fase ${fase} no tiene checklist de seguridad.` }
+
+    // Matching difuso por texto del ítem
+    const q = this.normSeg(itemQuery)
+    const qWords = q.split(/\s+/).filter((w) => w.length > 2)
+    const scored = checklist.map((c) => {
+      const t = this.normSeg(String(c.item))
+      let score = 0
+      if (t === q) score = 100
+      else if (t.includes(q) || q.includes(t)) score = 80
+      else { const hits = qWords.filter((w) => t.includes(w)).length; score = qWords.length ? (hits / qWords.length) * 60 : 0 }
+      return { c, score }
+    }).sort((a, b) => b.score - a.score)
+
+    const mejor = scored[0]
+    const segundo = scored[1]
+    if (!mejor || mejor.score < 30) {
+      return { error: `No encontré un ítem parecido a "${itemQuery}" en el checklist de ${fase}.`, items_disponibles: checklist.map((c) => c.item) }
+    }
+    if (segundo && mejor.score < 100 && (mejor.score - segundo.score) < 15) {
+      return {
+        ambiguo: true,
+        candidatos: scored.filter((s) => s.score >= 30).slice(0, 4).map((s) => s.c.item),
+        mensaje: `Hay varios ítems parecidos a "${itemQuery}" en ${fase}. Pregúntale al usuario a cuál se refiere (dile el texto exacto de los candidatos) antes de marcar.`,
+      }
+    }
+
+    const objetivo = mejor.c
+    try {
+      res.write(`event:status\ndata:${JSON.stringify({ step: `Actualizando checklist de ${fase}...`, icon: 'shield' })}\n\n`)
+      const nuevoChecklist = estado === 'eliminar'
+        ? checklist.filter((c) => c.id !== objetivo.id)
+        : checklist.map((c) => c.id === objetivo.id ? { ...c, estado } : c)
+      await this.fasesDetalle.guardar(proyectoId, key, { ...prev, checklist: nuevoChecklist })
+      res.write(`event:seguridad_actualizada\ndata:${JSON.stringify({ fase })}\n\n`)
+
+      const aplican = nuevoChecklist.filter((c) => c.estado !== 'no_aplica')
+      const cumplidos = aplican.filter((c) => c.estado === 'cumple').length
+      const pct = aplican.length ? Math.round((cumplidos / aplican.length) * 100) : 0
+      const ACC: Record<string, string> = {
+        cumple: `marqué como CUMPLIDO`, pendiente: `dejé PENDIENTE`, no_aplica: `marqué NO APLICA`, eliminar: `ELIMINÉ del checklist`,
+      }
+      this.logger.log(`Checklist seguridad ${fase} de ${proyectoId}: "${objetivo.item}" -> ${estado}`)
+      return {
+        ok: true,
+        fase,
+        item: objetivo.item,
+        estado,
+        cumplimiento_pct: pct,
+        mensaje: `${ACC[estado]} el ítem "${objetivo.item}" del checklist de seguridad de ${fase}. Cumplimiento ahora ${pct}%. Se ve en la pestaña Seguridad. Confírmaselo al usuario de forma breve.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error marcando checklist seguridad:', err?.message)
+      return { error: `Error actualizando el checklist: ${err?.message}` }
     }
   }
 
