@@ -1385,6 +1385,50 @@ const C4_TOOLS: LlmTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'registrar_recepcion_material',
+      description: 'Registra la RECEPCIÓN de un material que llegó a la obra (control de almacén). Úsala cuando el usuario avise que llegó material o mande una FOTO de la entrega (ej. "llegaron 200 bolsas de cemento", foto de un camión descargando fierro). Si vino con foto, se adjunta automáticamente como evidencia.',
+      parameters: {
+        type: 'object',
+        properties: {
+          descripcion: { type: 'string', description: 'Material recibido. Ej: "Cemento Sol tipo I", "Fierro corrugado 1/2\"".' },
+          cantidad: { type: 'number', description: 'Cantidad recibida. Opcional.' },
+          unidad: { type: 'string', description: 'Unidad: bolsas | varillas | m3 | ton | und… Opcional.' },
+          proveedor: { type: 'string', description: 'Proveedor/empresa. Opcional.' },
+          guia: { type: 'string', description: 'N° de guía de remisión. Opcional.' },
+        },
+        required: ['descripcion'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'registrar_camion',
+      description: 'Registra el movimiento de un CAMIÓN entrando o saliendo de la obra (control de accesos). Úsala cuando el usuario avise o mande una FOTO de un camión (ej. "volquete de desmonte saliendo, placa ABC-123", "entró el mixer de concreto"). Si vino con foto, se adjunta como evidencia.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tipo: { type: 'string', description: '"ingreso" (entra) o "salida" (sale).' },
+          motivo: { type: 'string', description: '"material" (trae material) | "desmonte" (saca desmonte) | "concreto" | "equipo" | "otro".' },
+          placa: { type: 'string', description: 'Placa del vehículo. Opcional.' },
+          viajes: { type: 'number', description: 'N° de viajes (para volquetes de desmonte). Por defecto 1. Opcional.' },
+          empresa: { type: 'string', description: 'Empresa/transportista. Opcional.' },
+        },
+        required: ['tipo'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'consultar_logistica',
+      description: 'Muestra la bitácora de LOGÍSTICA de la obra: últimas recepciones de material y movimientos de camiones (entradas/salidas). Úsala cuando pregunten "qué llegó hoy", "cuántos volquetes salieron", "cómo va el desmonte", "qué material se recibió".',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
 ]
 
 // Plantilla de etapas por fase (keys = las que usan los registros de generar_proyecto).
@@ -1434,6 +1478,7 @@ export class ChatService {
   private readonly whatsappHist        = new Map<string, LlmMessage[]>() // memoria por número (canal WhatsApp)
   private readonly proyectoActivoChat  = new Map<string, string>()       // número → proyecto activo (canal chat)
   private readonly pendingDocs         = new Map<string, { buffer: Buffer; filename: string; caption?: string }>() // PDF por enviar (canal chat)
+  private readonly lastChatImage       = new Map<string, string>()       // última foto (dataURL) del chat, para adjuntarla al registrar logística
 
   /** El controller (Telegram/WhatsApp) toma el documento pendiente de un chat para enviarlo. */
   takePendingDoc(phone: string): { buffer: Buffer; filename: string; caption?: string } | undefined {
@@ -1854,6 +1899,7 @@ export class ChatService {
       `- FIABILIDAD (crítico): confirma SOLO lo que la herramienta REALMENTE devolvió y reporta sus NÚMEROS reales (ej. "marqué 3 de 12", el "cambiados" que te da la tool). NUNCA digas "marqué todos" o "100%" si la tool no lo confirmó. Si NO tienes una herramienta para lo que piden (ej. reordenar el checklist, cambiar colores, exportar), DILO con claridad ("eso todavía no lo puedo hacer desde aquí") — NO muestres un resultado simulado (como una lista "ya reordenada") ni des a entender que lo aplicaste. Nunca afirmes una acción sin haber llamado la herramienta y visto su resultado ok.\n` +
       `- CHECKLIST DE SEGURIDAD: para marcar/tachar ítems del checklist de seguridad usa marcar_checklist_seguridad; para verlos, consultar_checklist_seguridad. EXCEPCIÓN a la acción directa: si la herramienta responde "necesita_fase", "ambiguo" o con "candidatos", NO elijas tú — muéstrale al usuario esas opciones (las fases o el texto exacto de los ítems parecidos) y pregúntale a CUÁL se refiere; recién cuando te confirme, márcalo. Si no encuentra el ítem, dile brevemente cuáles hay.\n` +
       `- CALIDAD: para el plan de calidad usa consultar_calidad (ver protocolos y no conformidades), crear_calidad (armar los protocolos de liberación de una fase), liberar_protocolo (marcar un protocolo como liberado u observado) y registrar_no_conformidad (defectos de calidad — ej. desde una FOTO: "veo una cangrejera en la columna, ¿registro una no conformidad?"). Mismo criterio que seguridad: si una tool devuelve "ambiguo", "candidatos" o "necesita_fase", pregúntale al usuario a cuál se refiere antes de actuar.\n` +
+      `- LOGÍSTICA (recepción de materiales y control de camiones): aunque te lo digan como simple AVISO ("salió un volquete", "llegó el cemento", "entró el mixer"), LLAMA la tool de inmediato — nunca digas "registré" sin haberla llamado. Material que llegó → registrar_recepcion_material (ej. "llegaron 200 bolsas de cemento"). Camión entrando/saliendo (volquete de desmonte, mixer, entrega) → registrar_camion con tipo ingreso/salida, placa y motivo. La foto que mandaron se adjunta sola como evidencia. Para ver la bitácora → consultar_logistica ("¿qué llegó hoy?", "¿cuántos volquetes salieron?").\n` +
       `- PROYECTOS: el jefe puede tener varios proyectos. Para ver la lista usa listar_proyectos; para cambiar, seleccionar_proyecto. Si dice "lista mis proyectos", "trabaja en el proyecto X", "cambia a Y", úsalas. El proyecto elegido queda activo para todo lo que sigue.\n` +
       `- Si el resultado es largo (un análisis), resume lo clave (TIR, N° de deptos, etc.) en pocas líneas.`
     const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + estadoProyecto + notaWhatsapp + seleccionContext
@@ -1875,7 +1921,8 @@ export class ChatService {
     // correlacione con las etapas/actividades reales del proyecto (ESTADO ACTUAL).
     const promptFoto =
       'Te mandaron una FOTO real de la obra. ANALÍZALA de verdad (sí puedes ver imágenes de construcción). ' +
-      'Haz 3 cosas, breve y natural: ' +
+      'CASO ESPECIAL — LOGÍSTICA: si la foto es de un CAMIÓN (volquete de desmonte, mixer de concreto, camión de entrega) o de MATERIAL que llegó (cemento, fierro, agregados), NO hables de actividades: registra directo con registrar_camion (tipo ingreso/salida, placa, motivo) o registrar_recepcion_material; la foto se adjunta sola como evidencia. Confirma con los datos que ves (placa, material, cantidad). ' +
+      'En cualquier otro caso (avance de obra), haz 3 cosas, breve y natural: ' +
       '1) Di en 1 línea qué se ve (avance real, maquinaria, elementos, seguridad). ' +
       '2) Mira el ESTADO ACTUAL de arriba (fases, etapas y actividades de este proyecto) e IDENTIFICA a qué fase/etapa corresponde la foto y qué actividades parecen YA avanzadas o TERMINADAS según la imagen. IMPORTANTE: nombra SOLO actividades que EXISTAN de verdad en el ESTADO ACTUAL (nombre exacto). Si esa fase NO tiene actividades registradas, dilo con claridad y ofrece CREARLAS según lo que ves — NO inventes nombres de actividades que no están en la lista. ' +
       '3) OFRÉCELE acciones concretas y pregúntale qué quiere: marcar esas actividades como completadas (con actualizar_actividades), agregar actividades/etapas (o partidas del catálogo), o revisar el checklist de seguridad. ' +
@@ -1912,6 +1959,10 @@ export class ChatService {
       userContent = texto || 'Hola'
     }
 
+    // Guarda la foto de este turno para poder adjuntarla si la IA registra logística (recepción/camión).
+    if (media?.imageBase64) this.lastChatImage.set(phone, `data:${media.imageMime || 'image/jpeg'};base64,${media.imageBase64}`)
+    else this.lastChatImage.delete(phone)
+
     const hist = this.whatsappHist.get(phone) ?? []
     const messages: LlmMessage[] = [
       { role: 'system', content: systemPrompt },
@@ -1930,6 +1981,8 @@ export class ChatService {
     } catch (e: any) {
       this.logger.error(`WhatsApp loop error: ${e?.message}`)
       return 'Disculpa, tuve un problema procesando tu mensaje. ¿Puedes repetirlo?'
+    } finally {
+      this.lastChatImage.delete(phone) // la foto solo vale para este turno
     }
 
     const nuevoHist: LlmMessage[] = [
@@ -2074,6 +2127,9 @@ export class ChatService {
     if (name === 'crear_calidad') return this.toolCrearCalidad(args, res, proyectoId)
     if (name === 'liberar_protocolo') return this.toolLiberarProtocolo(args, res, proyectoId)
     if (name === 'registrar_no_conformidad') return this.toolRegistrarNoConformidad(args, res, proyectoId)
+    if (name === 'registrar_recepcion_material') return this.toolRegistrarRecepcionMaterial(args, res, proyectoId, phone)
+    if (name === 'registrar_camion') return this.toolRegistrarCamion(args, res, proyectoId, phone)
+    if (name === 'consultar_logistica') return this.toolConsultarLogistica(proyectoId)
 
     return { error: `Tool desconocida: ${name}` }
   }
@@ -3174,6 +3230,89 @@ export class ChatService {
     } catch (err: any) {
       this.logger.error('Error registrando no conformidad:', err?.message)
       return { error: `Error registrando la no conformidad: ${err?.message}` }
+    }
+  }
+
+  // ── Logística de obra: recepción de materiales + control de camiones ──
+  private async toolRegistrarRecepcionMaterial(args: Record<string, any>, res: Response, proyectoId: string, phone?: string): Promise<any> {
+    const material = String(args.descripcion ?? args.material ?? '').trim()
+    if (!material) return { error: 'Falta indicar qué material se recibió.' }
+    try {
+      const det = await this.fasesDetalle.obtener(proyectoId, 'logistica').catch(() => null)
+      const prev: any = det?.datos ?? {}
+      const recepciones: any[] = Array.isArray(prev.recepciones) ? prev.recepciones : []
+      const foto = phone ? this.lastChatImage.get(phone) : undefined
+      const nueva = {
+        id: this.uidCal(), fecha: this.hoyISO(), hora: new Date().toISOString().slice(11, 16),
+        material: material.slice(0, 200),
+        cantidad: args.cantidad != null && !isNaN(Number(args.cantidad)) ? Number(args.cantidad) : undefined,
+        unidad: args.unidad ? String(args.unidad).trim().slice(0, 20) : undefined,
+        proveedor: args.proveedor ? String(args.proveedor).trim().slice(0, 120) : undefined,
+        guia: args.guia ? String(args.guia).trim().slice(0, 60) : undefined,
+        foto,
+      }
+      await this.fasesDetalle.guardar(proyectoId, 'logistica', { ...prev, recepciones: [nueva, ...recepciones].slice(0, 300) })
+      res.write(`event:logistica_actualizada\ndata:{}\n\n`)
+      this.logger.log(`Recepción material ${proyectoId}: ${material}`)
+      const cant = nueva.cantidad != null ? `${nueva.cantidad} ${nueva.unidad ?? ''} de ` : ''
+      return { ok: true, mensaje: `Registré la recepción: ${cant}${material}${nueva.proveedor ? ` (${nueva.proveedor})` : ''}${foto ? ' con la foto de evidencia' : ''}. Se ve en el módulo Logística. Confírmaselo breve.` }
+    } catch (err: any) {
+      this.logger.error('Error registrando recepción:', err?.message)
+      return { error: `Error registrando la recepción: ${err?.message}` }
+    }
+  }
+
+  private async toolRegistrarCamion(args: Record<string, any>, res: Response, proyectoId: string, phone?: string): Promise<any> {
+    let tipo = this.normSeg(String(args.tipo ?? ''))
+    tipo = /sal|out|sale/.test(tipo) ? 'salida' : 'ingreso'
+    let motivo = this.normSeg(String(args.motivo ?? ''))
+    if (/desmont|escombr|elimin/.test(motivo)) motivo = 'desmonte'
+    else if (/concret|mixer|premezcl/.test(motivo)) motivo = 'concreto'
+    else if (/material|insumo|cemento|fierro|acero|agregad/.test(motivo)) motivo = 'material'
+    else if (/equip|maquin|grua|excavad/.test(motivo)) motivo = 'equipo'
+    else motivo = motivo || 'otro'
+    try {
+      const det = await this.fasesDetalle.obtener(proyectoId, 'logistica').catch(() => null)
+      const prev: any = det?.datos ?? {}
+      const camiones: any[] = Array.isArray(prev.camiones) ? prev.camiones : []
+      const foto = phone ? this.lastChatImage.get(phone) : undefined
+      const nuevo = {
+        id: this.uidCal(), fecha: this.hoyISO(), hora: new Date().toISOString().slice(11, 16),
+        tipo, motivo,
+        placa: args.placa ? String(args.placa).trim().toUpperCase().slice(0, 12) : undefined,
+        viajes: args.viajes != null && !isNaN(Number(args.viajes)) ? Number(args.viajes) : 1,
+        empresa: args.empresa ? String(args.empresa).trim().slice(0, 120) : undefined,
+        foto,
+      }
+      await this.fasesDetalle.guardar(proyectoId, 'logistica', { ...prev, camiones: [nuevo, ...camiones].slice(0, 300) })
+      res.write(`event:logistica_actualizada\ndata:{}\n\n`)
+      this.logger.log(`Camión ${tipo}/${motivo} ${proyectoId}: ${nuevo.placa ?? ''}`)
+      const desmonteViajes = motivo === 'desmonte' ? [nuevo, ...camiones].filter((c) => c.motivo === 'desmonte' && c.tipo === 'salida').reduce((a, c) => a + (Number(c.viajes) || 1), 0) : 0
+      return {
+        ok: true,
+        mensaje: `Registré ${tipo === 'salida' ? 'la SALIDA' : 'el INGRESO'} de camión${nuevo.placa ? ` (placa ${nuevo.placa})` : ''} — ${motivo}${foto ? ', con foto' : ''}.${motivo === 'desmonte' ? ` Van ${desmonteViajes} viaje(s) de desmonte.` : ''} Se ve en Logística. Confírmaselo breve.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error registrando camión:', err?.message)
+      return { error: `Error registrando el camión: ${err?.message}` }
+    }
+  }
+
+  private async toolConsultarLogistica(proyectoId: string): Promise<any> {
+    const det = await this.fasesDetalle.obtener(proyectoId, 'logistica').catch(() => null)
+    const prev: any = det?.datos ?? {}
+    const recepciones: any[] = Array.isArray(prev.recepciones) ? prev.recepciones : []
+    const camiones: any[] = Array.isArray(prev.camiones) ? prev.camiones : []
+    if (!recepciones.length && !camiones.length) return { vacio: true, mensaje: 'Aún no hay registros de logística (recepciones ni camiones).' }
+    const viajesDesmonte = camiones.filter((c) => c.motivo === 'desmonte' && c.tipo === 'salida').reduce((a, c) => a + (Number(c.viajes) || 1), 0)
+    return {
+      recepciones_hoy: recepciones.filter((r) => r.fecha === this.hoyISO()).length,
+      total_recepciones: recepciones.length,
+      ultimas_recepciones: recepciones.slice(0, 8).map((r) => `${r.cantidad ?? ''} ${r.unidad ?? ''} ${r.material}${r.proveedor ? ` (${r.proveedor})` : ''}`.trim()),
+      camiones_hoy: camiones.filter((c) => c.fecha === this.hoyISO()).length,
+      viajes_desmonte: viajesDesmonte,
+      ultimos_camiones: camiones.slice(0, 8).map((c) => `${c.tipo === 'salida' ? 'SALIÓ' : 'ENTRÓ'} ${c.placa ?? 'camión'} — ${c.motivo}`),
+      mensaje: 'Resume brevemente al usuario: qué material llegó y el movimiento de camiones (incluye los viajes de desmonte si hay).',
     }
   }
 
