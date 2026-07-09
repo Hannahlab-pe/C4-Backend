@@ -1652,7 +1652,7 @@ export class ChatService {
    * agente completo sobre el proyecto demo. El `res` es un objeto fantasma que
    * traga los eventos SSE; las acciones (crear etapas, etc.) SÍ se ejecutan de verdad.
    */
-  async responderWhatsapp(phone: string, userName: string, message: string, media?: { imageBase64?: string; imageMime?: string; audioBase64?: string; audioMime?: string }): Promise<string> {
+  async responderWhatsapp(phone: string, userName: string, message: string, media?: { imageBase64?: string; imageMime?: string; audioBase64?: string; audioMime?: string; pdfBase64?: string; pdfName?: string }): Promise<string> {
     const proyectoId = this.proyectoActivoChat.get(phone) || process.env.WHATSAPP_DEMO_PROYECTO_ID || ''
     if (!proyectoId) {
       this.logger.warn('WHATSAPP_DEMO_PROYECTO_ID no configurado')
@@ -1700,12 +1700,36 @@ export class ChatService {
       '3) OFRÉCELE acciones concretas y pregúntale qué quiere: marcar esas actividades como completadas (con actualizar_actividades), agregar actividades/etapas (o partidas del catálogo), o revisar el checklist de seguridad. ' +
       'Ej con actividades existentes: "Veo que la excavación masiva ya está avanzada. ¿Te marco \'Excavación masiva\' como completada?". Ej sin actividades: "Veo excavación avanzada, pero esta fase aún no tiene actividades cargadas. ¿Te las creo?". NO ejecutes todavía: primero muestra lo que ves y ofrece; actúa solo cuando el usuario confirme. Responde en texto plano, SIN asteriscos dobles (**) ni markdown.' +
       (texto ? ` Mensaje del usuario junto a la foto: "${texto}"` : '')
-    const userContent: any = media?.imageBase64
-      ? [
-          { type: 'text', text: promptFoto },
-          { type: 'image_url', image_url: { url: `data:${media.imageMime || 'image/jpeg'};base64,${media.imageBase64}` } },
-        ]
-      : (texto || 'Hola')
+
+    // PDF/documento: extraer el texto y dárselo a la IA para que lo analice, recomiende y actúe.
+    let pdfTexto = ''
+    if (media?.pdfBase64) {
+      try {
+        pdfTexto = (await this.parsePdf(Buffer.from(media.pdfBase64, 'base64'))).replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 16000)
+      } catch (e: any) { this.logger.warn(`WhatsApp PDF parse falló: ${e?.message}`) }
+      if (!pdfTexto) {
+        return `Recibí "${media.pdfName || 'tu PDF'}" 📄 pero no pude extraer texto (parece escaneado o solo imágenes). Si es un plano/escaneo, mándame una FOTO de la hoja y lo analizo por visión.`
+      }
+    }
+    const promptPdf =
+      `El usuario te envió un DOCUMENTO PDF ("${media?.pdfName || 'documento'}"). Extraje su texto (abajo, puede venir cortado). Eres el ingeniero asistente: responde breve y natural, en texto plano SIN asteriscos dobles (**) ni markdown.\n` +
+      `1) Resume en 2-4 líneas lo MÁS relevante: de qué trata y datos clave (partidas, metrados, especificaciones técnicas, fechas, montos, responsables, normas).\n` +
+      `2) Relaciónalo con ESTE proyecto (mira el ESTADO ACTUAL) y con tus herramientas: ¿qué acciones tienen sentido? (agregar partidas/actividades del catálogo a una fase, crear etapas, actualizar el checklist de seguridad, etc.).\n` +
+      `3) Si el usuario ya te pidió algo puntual en su mensaje, respóndelo o hazlo. Si no, OFRÉCELE 1-3 acciones concretas y pregúntale qué quiere. Para acciones grandes (crear muchas actividades) confirma antes de ejecutar.\n` +
+      (texto ? `\nMensaje del usuario junto al PDF: "${texto}"\n` : '') +
+      `\n===== TEXTO DEL DOCUMENTO =====\n${pdfTexto}`
+
+    let userContent: any
+    if (media?.imageBase64) {
+      userContent = [
+        { type: 'text', text: promptFoto },
+        { type: 'image_url', image_url: { url: `data:${media.imageMime || 'image/jpeg'};base64,${media.imageBase64}` } },
+      ]
+    } else if (pdfTexto) {
+      userContent = promptPdf
+    } else {
+      userContent = texto || 'Hola'
+    }
 
     const hist = this.whatsappHist.get(phone) ?? []
     const messages: LlmMessage[] = [
@@ -1729,7 +1753,7 @@ export class ChatService {
 
     const nuevoHist: LlmMessage[] = [
       ...hist,
-      { role: 'user', content: texto || '[foto de obra]' },
+      { role: 'user', content: texto || (media?.pdfBase64 ? `[PDF: ${media?.pdfName || 'documento'}]` : '[foto de obra]') },
       { role: 'assistant', content: text },
     ]
     this.whatsappHist.set(phone, nuevoHist.slice(-12))
