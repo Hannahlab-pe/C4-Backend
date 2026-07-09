@@ -1280,6 +1280,81 @@ const C4_TOOLS: LlmTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'consultar_calidad',
+      description: 'Consulta el plan de CALIDAD de una fase: los protocolos de liberación (puntos de inspección) con su estado (liberado / pendiente / observado) y las no conformidades registradas. Úsala cuando pregunten por la calidad, protocolos o liberaciones, o ANTES de liberar/observar un protocolo para analizar cuál coincide. Sin fase, devuelve qué fases tienen plan de calidad.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fase: { type: 'string', description: 'Opcional. Fase: demolicion | excavacion | construccion | acabados.' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'crear_calidad',
+      description: 'Arma los PROTOCOLOS DE LIBERACIÓN (puntos de inspección de calidad) de una fase. Úsala cuando el usuario pida el plan de calidad, los protocolos de liberación o "qué debo liberar en X". Genera protocolos realistas según la fase y sus partidas (usa el control/aceptación de cada partida: acero antes de vaciado, encofrado, instalaciones embebidas, f’c de probetas, etc.). Marca como crítico los que bloquean un hito irreversible (ej. liberación previa a vaciado). Por defecto AÑADE (no reemplaza).',
+      parameters: {
+        type: 'object',
+        properties: {
+          fase: { type: 'string', description: 'Slug: demolicion | excavacion | construccion | acabados' },
+          protocolos: {
+            type: 'array',
+            description: 'Protocolos de liberación / puntos de inspección de calidad.',
+            items: {
+              type: 'object',
+              properties: {
+                item: { type: 'string', description: 'Protocolo. Ej: "Liberación de acero de refuerzo antes del vaciado de losa".' },
+                critico: { type: 'boolean', description: 'true si bloquea un hito irreversible (vaciado, tapado de instalaciones).' },
+              },
+              required: ['item'],
+            },
+          },
+        },
+        required: ['fase', 'protocolos'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'liberar_protocolo',
+      description: 'Marca un protocolo de liberación de calidad de una fase como LIBERADO (o pendiente / observado / eliminar). Úsala cuando digan "libera el vaciado", "ya se liberó el acero", "el encofrado quedó observado". Matching DIFUSO por texto: si hay varios parecidos devuelve candidatos para confirmar; si no encuentra, devuelve la lista. Soporta todos:true para liberar todos. Requiere la fase.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fase: { type: 'string', description: 'Slug: demolicion | excavacion | construccion | acabados' },
+          item: { type: 'string', description: 'Texto (o parte) del protocolo. Ej: "acero", "vaciado", "encofrado". Omítelo si usas todos:true.' },
+          todos: { type: 'boolean', description: 'true = aplica el estado a TODOS los protocolos de esa fase.' },
+          estado: { type: 'string', description: '"liberado" (por defecto) | "pendiente" | "observado" | "eliminar".' },
+        },
+        required: ['fase'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'registrar_no_conformidad',
+      description: 'Registra una NO CONFORMIDAD de calidad en una fase (defecto o incumplimiento detectado). Úsala cuando el usuario reporte un problema de calidad o lo veas en una FOTO (ej. cangrejera, fisura, recubrimiento insuficiente, desplome). Queda abierta hasta que se levante.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fase: { type: 'string', description: 'Slug: demolicion | excavacion | construccion | acabados' },
+          descripcion: { type: 'string', description: 'Qué está mal. Ej: "Cangrejera en columna del eje 3, sótano 2".' },
+          ubicacion: { type: 'string', description: 'Opcional. Ubicación exacta (eje, nivel, ambiente).' },
+          responsable: { type: 'string', description: 'Opcional. Responsable del levantamiento.' },
+          severidad: { type: 'string', description: 'Opcional: "baja" | "media" | "alta". Por defecto media.' },
+        },
+        required: ['fase', 'descripcion'],
+      },
+    },
+  },
 ]
 
 // Plantilla de etapas por fase (keys = las que usan los registros de generar_proyecto).
@@ -1674,6 +1749,7 @@ export class ChatService {
       `- El ESTADO ACTUAL de arriba es la VERDAD del proyecto AHORA MISMO. NO menciones etapas ni actividades que no estén ahí, aunque en la conversación previa parezca que las creaste (pueden haberse borrado). Nunca digas "completé todas las etapas" salvo que el ESTADO ACTUAL lo muestre al 100%.\n` +
       `- FIABILIDAD (crítico): confirma SOLO lo que la herramienta REALMENTE devolvió y reporta sus NÚMEROS reales (ej. "marqué 3 de 12", el "cambiados" que te da la tool). NUNCA digas "marqué todos" o "100%" si la tool no lo confirmó. Si NO tienes una herramienta para lo que piden (ej. reordenar el checklist, cambiar colores, exportar), DILO con claridad ("eso todavía no lo puedo hacer desde aquí") — NO muestres un resultado simulado (como una lista "ya reordenada") ni des a entender que lo aplicaste. Nunca afirmes una acción sin haber llamado la herramienta y visto su resultado ok.\n` +
       `- CHECKLIST DE SEGURIDAD: para marcar/tachar ítems del checklist de seguridad usa marcar_checklist_seguridad; para verlos, consultar_checklist_seguridad. EXCEPCIÓN a la acción directa: si la herramienta responde "necesita_fase", "ambiguo" o con "candidatos", NO elijas tú — muéstrale al usuario esas opciones (las fases o el texto exacto de los ítems parecidos) y pregúntale a CUÁL se refiere; recién cuando te confirme, márcalo. Si no encuentra el ítem, dile brevemente cuáles hay.\n` +
+      `- CALIDAD: para el plan de calidad usa consultar_calidad (ver protocolos y no conformidades), crear_calidad (armar los protocolos de liberación de una fase), liberar_protocolo (marcar un protocolo como liberado u observado) y registrar_no_conformidad (defectos de calidad — ej. desde una FOTO: "veo una cangrejera en la columna, ¿registro una no conformidad?"). Mismo criterio que seguridad: si una tool devuelve "ambiguo", "candidatos" o "necesita_fase", pregúntale al usuario a cuál se refiere antes de actuar.\n` +
       `- Si el resultado es largo (un análisis), resume lo clave (TIR, N° de deptos, etc.) en pocas líneas.`
     const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + estadoProyecto + notaWhatsapp
 
@@ -1883,6 +1959,10 @@ export class ChatService {
     if (name === 'agregar_partidas') return this.toolAgregarPartidas(args, res, proyectoId)
     if (name === 'consultar_checklist_seguridad') return this.toolConsultarChecklistSeguridad(args, proyectoId)
     if (name === 'marcar_checklist_seguridad') return this.toolMarcarChecklistSeguridad(args, res, proyectoId)
+    if (name === 'consultar_calidad') return this.toolConsultarCalidad(args, proyectoId)
+    if (name === 'crear_calidad') return this.toolCrearCalidad(args, res, proyectoId)
+    if (name === 'liberar_protocolo') return this.toolLiberarProtocolo(args, res, proyectoId)
+    if (name === 'registrar_no_conformidad') return this.toolRegistrarNoConformidad(args, res, proyectoId)
 
     return { error: `Tool desconocida: ${name}` }
   }
@@ -2774,6 +2854,168 @@ export class ChatService {
     } catch (err: any) {
       this.logger.error('Error marcando checklist seguridad:', err?.message)
       return { error: `Error actualizando el checklist: ${err?.message}` }
+    }
+  }
+
+  // ── Calidad (protocolos de liberación + no conformidades) desde la IA ──
+  private readonly FASES_CAL = ['demolicion', 'excavacion', 'construccion', 'acabados']
+  private hoyISO = () => new Date().toISOString().slice(0, 10)
+  private uidCal = () => Math.random().toString(36).slice(2, 10)
+
+  private async toolConsultarCalidad(args: Record<string, any>, proyectoId: string): Promise<any> {
+    const fase = this.resolverFaseSeg(String(args.fase ?? ''))
+    if (!fase || !this.FASES_CAL.includes(fase)) {
+      const disp: any[] = []
+      for (const f of this.FASES_CAL) {
+        const det = await this.fasesDetalle.obtener(proyectoId, `${f}__calidad`)
+        const pr: any[] = Array.isArray(det?.datos?.protocolos) ? det!.datos.protocolos : []
+        const nc: any[] = Array.isArray(det?.datos?.noConformidades) ? det!.datos.noConformidades : []
+        if (pr.length || nc.length) disp.push({ fase: f, protocolos: pr.length, liberados: pr.filter((p) => p.estado === 'liberado').length, nc_abiertas: nc.filter((n) => n.estado === 'abierta').length })
+      }
+      if (!disp.length) return { hay_calidad: false, mensaje: 'Ninguna fase tiene plan de calidad todavía. Puedes crear los protocolos con crear_calidad.' }
+      return { necesita_fase: true, fases_con_calidad: disp, mensaje: 'Hay plan de calidad en más de una fase. Pregúntale al usuario a cuál se refiere.' }
+    }
+    const det = await this.fasesDetalle.obtener(proyectoId, `${fase}__calidad`)
+    const protocolos: any[] = Array.isArray(det?.datos?.protocolos) ? det!.datos.protocolos : []
+    const ncs: any[] = Array.isArray(det?.datos?.noConformidades) ? det!.datos.noConformidades : []
+    if (!protocolos.length && !ncs.length) return { fase, hay_calidad: false, mensaje: `La fase ${fase} no tiene plan de calidad. Ofrece crearlo con crear_calidad.` }
+    return {
+      fase,
+      total_protocolos: protocolos.length,
+      liberados: protocolos.filter((p) => p.estado === 'liberado').length,
+      protocolos: protocolos.map((p) => ({ item: p.item, estado: p.estado, critico: !!p.critico })),
+      nc_abiertas: ncs.filter((n) => n.estado === 'abierta').length,
+      no_conformidades: ncs.map((n) => ({ descripcion: n.descripcion, ubicacion: n.ubicacion, responsable: n.responsable, severidad: n.severidad, estado: n.estado })),
+      mensaje: `Plan de calidad de ${fase}. Resúmeselo breve al usuario. Para liberar un protocolo usa liberar_protocolo; para reportar un defecto, registrar_no_conformidad.`,
+    }
+  }
+
+  private async toolCrearCalidad(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const fase = String(args.fase ?? '').trim().toLowerCase()
+    if (!this.FASES_CAL.includes(fase)) return { error: 'Fase inválida. Usa: ' + this.FASES_CAL.join(', ') }
+    const protoIn = (args.protocolos ?? []).filter((p: any) => p?.item && String(p.item).trim())
+    if (!protoIn.length) return { error: 'Envía al menos un protocolo de liberación.' }
+    try {
+      res.write(`event:status\ndata:${JSON.stringify({ step: `Armando plan de calidad de ${fase}...`, icon: 'shield' })}\n\n`)
+      const key = `${fase}__calidad`
+      const det = await this.fasesDetalle.obtener(proyectoId, key)
+      const prev: any = det?.datos ?? {}
+      const prevProto: any[] = Array.isArray(prev.protocolos) ? prev.protocolos : []
+      const ya = new Set(prevProto.map((p) => String(p.item).trim().toLowerCase()))
+      const protocolos = [...prevProto]
+      for (const p of protoIn.slice(0, 30)) {
+        const item = String(p.item).trim()
+        if (ya.has(item.toLowerCase())) continue
+        ya.add(item.toLowerCase())
+        protocolos.push({ id: this.uidCal(), item: item.slice(0, 240), estado: 'pendiente', critico: p.critico === true })
+      }
+      await this.fasesDetalle.guardar(proyectoId, key, { ...prev, protocolos, noConformidades: Array.isArray(prev.noConformidades) ? prev.noConformidades : [] })
+      res.write(`event:calidad_actualizada\ndata:${JSON.stringify({ fase })}\n\n`)
+      this.logger.log(`Calidad ${fase} de ${proyectoId}: ${protocolos.length} protocolos`)
+      return { ok: true, fase, protocolos: protocolos.length, mensaje: `Plan de calidad de ${fase} listo: ${protocolos.length} protocolo(s) de liberación. El usuario los ve en la pestaña Calidad y los va liberando. Recuérdale los críticos (previos a vaciado / tapado de instalaciones).` }
+    } catch (err: any) {
+      this.logger.error('Error creando calidad:', err?.message)
+      return { error: `Error creando plan de calidad: ${err?.message}` }
+    }
+  }
+
+  private async toolLiberarProtocolo(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const fase = this.resolverFaseSeg(String(args.fase ?? ''))
+    if (!fase || !this.FASES_CAL.includes(fase)) return { necesita_fase: true, error: 'Falta la fase (demolición, excavación, construcción o acabados) del protocolo. Pregúntale al usuario o usa consultar_calidad.' }
+    const itemQuery = String(args.item ?? '').trim()
+    const todos = args.todos === true || /^(tod[oa]s?|all|toda la lista|todos los protocolos)$/.test(this.normSeg(itemQuery))
+    if (!itemQuery && !todos) return { error: 'Falta indicar qué protocolo liberar (o pide "todos").' }
+
+    let estado = this.normSeg(String(args.estado ?? 'liberado'))
+    if (/liber|conform|aprob|listo|hecho|\bok\b|si\b/.test(estado)) estado = 'liberado'
+    else if (/observ|\bobs\b|reparo|no.?conform|rechaz/.test(estado)) estado = 'observado'
+    else if (/pend|desmarc|revert/.test(estado)) estado = 'pendiente'
+    else if (/elimin|borra|quita/.test(estado)) estado = 'eliminar'
+    if (!['liberado', 'pendiente', 'observado', 'eliminar'].includes(estado)) estado = 'liberado'
+
+    const key = `${fase}__calidad`
+    const det = await this.fasesDetalle.obtener(proyectoId, key)
+    const prev: any = det?.datos ?? {}
+    const protocolos: any[] = Array.isArray(prev.protocolos) ? prev.protocolos : []
+    if (!protocolos.length) return { error: `La fase ${fase} no tiene protocolos de calidad. Créalos con crear_calidad.` }
+    const set = (p: any, e: string) => e === 'liberado' ? { ...p, estado: 'liberado', fecha: this.hoyISO() } : e === 'pendiente' ? { ...p, estado: 'pendiente', fecha: undefined } : { ...p, estado: e }
+
+    if (todos) {
+      if (estado === 'eliminar') return { error: 'No borro todos los protocolos de golpe. Dime cuál eliminar.' }
+      const nuevo = protocolos.map((p) => set(p, estado))
+      const cambiados = nuevo.filter((p, i) => p.estado !== protocolos[i].estado).length
+      try {
+        res.write(`event:status\ndata:${JSON.stringify({ step: `Actualizando calidad de ${fase}...`, icon: 'shield' })}\n\n`)
+        await this.fasesDetalle.guardar(proyectoId, key, { ...prev, protocolos: nuevo })
+        res.write(`event:calidad_actualizada\ndata:${JSON.stringify({ fase })}\n\n`)
+        const pct = nuevo.length ? Math.round(nuevo.filter((p) => p.estado === 'liberado').length / nuevo.length * 100) : 0
+        return { ok: true, fase, todos: true, cambiados, cumplimiento_pct: pct, mensaje: `Actualicé ${cambiados} de ${protocolos.length} protocolo(s) de ${fase} a "${estado}". Liberado ${pct}%. Reporta el número real.` }
+      } catch (err: any) {
+        this.logger.error('Error liberando protocolos (todos):', err?.message)
+        return { error: `Error actualizando calidad: ${err?.message}` }
+      }
+    }
+
+    const q = this.normSeg(itemQuery)
+    const qWords = q.split(/\s+/).filter((w) => w.length > 2)
+    const scored = protocolos.map((p) => {
+      const t = this.normSeg(String(p.item))
+      let s = 0
+      if (t === q) s = 100
+      else if (t.includes(q) || q.includes(t)) s = 80
+      else { const h = qWords.filter((w) => t.includes(w)).length; s = qWords.length ? (h / qWords.length) * 60 : 0 }
+      return { p, s }
+    }).sort((a, b) => b.s - a.s)
+    const mejor = scored[0], segundo = scored[1]
+    if (!mejor || mejor.s < 30) return { error: `No encontré un protocolo parecido a "${itemQuery}" en ${fase}.`, protocolos_disponibles: protocolos.map((p) => p.item) }
+    if (segundo && mejor.s < 100 && (mejor.s - segundo.s) < 15) {
+      return { ambiguo: true, candidatos: scored.filter((s) => s.s >= 30).slice(0, 4).map((s) => s.p.item), mensaje: `Hay varios protocolos parecidos a "${itemQuery}" en ${fase}. Pregúntale al usuario a cuál se refiere antes de liberar.` }
+    }
+    const objetivo = mejor.p
+    try {
+      res.write(`event:status\ndata:${JSON.stringify({ step: `Actualizando calidad de ${fase}...`, icon: 'shield' })}\n\n`)
+      const nuevo = estado === 'eliminar' ? protocolos.filter((p) => p.id !== objetivo.id) : protocolos.map((p) => p.id === objetivo.id ? set(p, estado) : p)
+      await this.fasesDetalle.guardar(proyectoId, key, { ...prev, protocolos: nuevo })
+      res.write(`event:calidad_actualizada\ndata:${JSON.stringify({ fase })}\n\n`)
+      const pct = nuevo.length ? Math.round(nuevo.filter((p) => p.estado === 'liberado').length / nuevo.length * 100) : 0
+      const ACC: Record<string, string> = { liberado: 'LIBERÉ', pendiente: 'dejé PENDIENTE', observado: 'marqué OBSERVADO', eliminar: 'ELIMINÉ' }
+      this.logger.log(`Calidad ${fase} de ${proyectoId}: "${objetivo.item}" -> ${estado}`)
+      return { ok: true, fase, protocolo: objetivo.item, estado, cumplimiento_pct: pct, mensaje: `${ACC[estado]} el protocolo "${objetivo.item}" de ${fase}. Liberado ${pct}%. Se ve en la pestaña Calidad. Confírmaselo breve al usuario.` }
+    } catch (err: any) {
+      this.logger.error('Error liberando protocolo:', err?.message)
+      return { error: `Error actualizando calidad: ${err?.message}` }
+    }
+  }
+
+  private async toolRegistrarNoConformidad(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const fase = this.resolverFaseSeg(String(args.fase ?? ''))
+    if (!fase || !this.FASES_CAL.includes(fase)) return { necesita_fase: true, error: 'Falta la fase de la no conformidad (demolición, excavación, construcción o acabados). Pregúntale al usuario.' }
+    const descripcion = String(args.descripcion ?? '').trim()
+    if (!descripcion) return { error: 'Falta describir la no conformidad.' }
+    const sevIn = this.normSeg(String(args.severidad ?? ''))
+    const severidad = ['baja', 'media', 'alta'].includes(sevIn) ? sevIn : 'media'
+    try {
+      res.write(`event:status\ndata:${JSON.stringify({ step: `Registrando no conformidad en ${fase}...`, icon: 'shield' })}\n\n`)
+      const key = `${fase}__calidad`
+      const det = await this.fasesDetalle.obtener(proyectoId, key)
+      const prev: any = det?.datos ?? {}
+      const ncs: any[] = Array.isArray(prev.noConformidades) ? prev.noConformidades : []
+      const nueva = {
+        id: this.uidCal(), fecha: this.hoyISO(), descripcion: descripcion.slice(0, 500),
+        ubicacion: args.ubicacion ? String(args.ubicacion).trim().slice(0, 120) : undefined,
+        responsable: args.responsable ? String(args.responsable).trim().slice(0, 80) : undefined,
+        severidad, estado: 'abierta',
+      }
+      await this.fasesDetalle.guardar(proyectoId, key, { ...prev, noConformidades: [...ncs, nueva], protocolos: Array.isArray(prev.protocolos) ? prev.protocolos : [] })
+      res.write(`event:calidad_actualizada\ndata:${JSON.stringify({ fase })}\n\n`)
+      this.logger.log(`NC calidad ${fase} de ${proyectoId}: "${descripcion.slice(0, 60)}"`)
+      return {
+        ok: true, fase, no_conformidad: nueva.descripcion, severidad, abiertas: ncs.filter((n) => n.estado === 'abierta').length + 1,
+        mensaje: `Registré la no conformidad en ${fase}: "${nueva.descripcion}" (severidad ${severidad})${nueva.responsable ? `, responsable ${nueva.responsable}` : ''}. Queda ABIERTA hasta su levantamiento. Se ve en la pestaña Calidad. Confírmaselo breve al usuario.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error registrando no conformidad:', err?.message)
+      return { error: `Error registrando la no conformidad: ${err?.message}` }
     }
   }
 
