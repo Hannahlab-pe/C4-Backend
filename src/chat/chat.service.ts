@@ -814,6 +814,28 @@ const C4_TOOLS: LlmTool[] = [
   {
     type: 'function',
     function: {
+      name: 'listar_proyectos',
+      description: 'Lista los proyectos del jefe para que elija en cuál trabajar. Úsala al INICIO de la conversación cuando no hay un proyecto seleccionado, o cuando el usuario pida "lista mis proyectos", "¿en qué proyectos estoy?", "cambiar de proyecto".',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'seleccionar_proyecto',
+      description: 'Fija en CUÁL proyecto trabaja este chat; TODAS las acciones siguientes (crear etapas, marcar, analizar foto/PDF, calidad, seguridad) operan sobre él. Úsala cuando el usuario elija un proyecto (por nombre o por el número de la lista) o diga "trabaja en el proyecto X" / "cambia al proyecto Y". Hace matching por nombre; si no encuentra, devuelve la lista para que confirme.',
+      parameters: {
+        type: 'object',
+        properties: {
+          nombre: { type: 'string', description: 'Nombre (o parte) del proyecto, o el número de la lista (ej: "2" o "Torre Miraflores").' },
+        },
+        required: ['nombre'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'generar_proyecto',
       description:
         'Genera el plan de ejecución del proyecto: rellena los checklists de tareas y equipos de cada fase (demolición, excavación, construcción, acabados, administración) en los módulos del sistema, usando TODA la data de la conversación (análisis, documentos, auditoría). Llamar SOLO después de que el usuario confirme explícitamente que quiere generar el proyecto (responde sí a "¿Comienzo con la generación del proyecto?"). SOBRESCRIBE los checklists existentes de las fases incluidas.',
@@ -1728,14 +1750,32 @@ export class ChatService {
    * traga los eventos SSE; las acciones (crear etapas, etc.) SÍ se ejecutan de verdad.
    */
   async responderWhatsapp(phone: string, userName: string, message: string, media?: { imageBase64?: string; imageMime?: string; audioBase64?: string; audioMime?: string; pdfBase64?: string; pdfName?: string }): Promise<string> {
-    const proyectoId = this.proyectoActivoChat.get(phone) || process.env.WHATSAPP_DEMO_PROYECTO_ID || ''
+    // /start (o "empezar") reinicia la selección de proyecto y el historial de este chat.
+    if (/^\/?(start|empezar)$/i.test((message || '').trim())) { this.proyectoActivoChat.delete(phone); this.whatsappHist.delete(phone) }
+
+    const seleccionado = this.proyectoActivoChat.get(phone)
+    const proyectoId = seleccionado || process.env.WHATSAPP_DEMO_PROYECTO_ID || ''
     if (!proyectoId) {
       this.logger.warn('WHATSAPP_DEMO_PROYECTO_ID no configurado')
       return 'El asistente de obra aún no está configurado. Avísale al equipo de C4.'
     }
 
-    const contextoDocumentos = await this.documentos.getContextoParaLlm(proyectoId).catch(() => '')
-    const estadoProyecto = await this.resumenProyecto(proyectoId).catch(() => '')
+    // El contexto del proyecto (documentos + estado) solo se inyecta cuando YA hay un proyecto elegido.
+    const contextoDocumentos = seleccionado ? await this.documentos.getContextoParaLlm(proyectoId).catch(() => '') : ''
+    const estadoProyecto = seleccionado ? await this.resumenProyecto(proyectoId).catch(() => '') : ''
+
+    // Sin proyecto elegido → el bot primero pregunta en cuál trabajar.
+    let seleccionContext = ''
+    if (!seleccionado) {
+      const proyectos = await this.proyectosDelJefe().catch(() => [] as { id: string; nombre: string; distrito?: string }[])
+      const lista = proyectos.length
+        ? proyectos.map((p, i) => `${i + 1}. ${p.nombre}${p.distrito ? ` — ${p.distrito}` : ''}`).join('\n')
+        : '(el jefe aún no tiene proyectos; puede crear uno diciendo "crea el proyecto X en Y")'
+      seleccionContext =
+        `\n\n---\n## AÚN NO HAY PROYECTO SELECCIONADO EN ESTE CHAT\n` +
+        `El jefe puede tener varios proyectos. Tu PRIMERA acción: saluda en 1 línea y pregúntale EN CUÁL de sus proyectos quiere trabajar. Sus proyectos:\n${lista}\n` +
+        `Cuando elija (por número o nombre), llama seleccionar_proyecto para fijarlo. Si en su mensaje YA menciona uno de la lista, selecciónalo directo y sigue. Si pide crear uno nuevo, usa crear_proyecto. NO ejecutes otras acciones (crear etapas, analizar foto/PDF, calidad, etc.) hasta que haya un proyecto seleccionado.`
+    }
     const notaWhatsapp =
       `\n\n---\n## CANAL: CHAT (WhatsApp / Telegram)\n` +
       `Respondes por chat a ${userName || 'un usuario de obra'}. Gestionas el proyecto "Residencial Sáenz Peña" (Barranco).\n` +
@@ -1750,8 +1790,9 @@ export class ChatService {
       `- FIABILIDAD (crítico): confirma SOLO lo que la herramienta REALMENTE devolvió y reporta sus NÚMEROS reales (ej. "marqué 3 de 12", el "cambiados" que te da la tool). NUNCA digas "marqué todos" o "100%" si la tool no lo confirmó. Si NO tienes una herramienta para lo que piden (ej. reordenar el checklist, cambiar colores, exportar), DILO con claridad ("eso todavía no lo puedo hacer desde aquí") — NO muestres un resultado simulado (como una lista "ya reordenada") ni des a entender que lo aplicaste. Nunca afirmes una acción sin haber llamado la herramienta y visto su resultado ok.\n` +
       `- CHECKLIST DE SEGURIDAD: para marcar/tachar ítems del checklist de seguridad usa marcar_checklist_seguridad; para verlos, consultar_checklist_seguridad. EXCEPCIÓN a la acción directa: si la herramienta responde "necesita_fase", "ambiguo" o con "candidatos", NO elijas tú — muéstrale al usuario esas opciones (las fases o el texto exacto de los ítems parecidos) y pregúntale a CUÁL se refiere; recién cuando te confirme, márcalo. Si no encuentra el ítem, dile brevemente cuáles hay.\n` +
       `- CALIDAD: para el plan de calidad usa consultar_calidad (ver protocolos y no conformidades), crear_calidad (armar los protocolos de liberación de una fase), liberar_protocolo (marcar un protocolo como liberado u observado) y registrar_no_conformidad (defectos de calidad — ej. desde una FOTO: "veo una cangrejera en la columna, ¿registro una no conformidad?"). Mismo criterio que seguridad: si una tool devuelve "ambiguo", "candidatos" o "necesita_fase", pregúntale al usuario a cuál se refiere antes de actuar.\n` +
+      `- PROYECTOS: el jefe puede tener varios proyectos. Para ver la lista usa listar_proyectos; para cambiar, seleccionar_proyecto. Si dice "lista mis proyectos", "trabaja en el proyecto X", "cambia a Y", úsalas. El proyecto elegido queda activo para todo lo que sigue.\n` +
       `- Si el resultado es largo (un análisis), resume lo clave (TIR, N° de deptos, etc.) en pocas líneas.`
-    const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + estadoProyecto + notaWhatsapp
+    const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + estadoProyecto + notaWhatsapp + seleccionContext
 
     // Voz: si viene audio, transcribir y usar SOLO la transcripción real.
     // (El bridge puede mandar un texto placeholder tipo "Esta es una nota de voz, transcríbela"
@@ -1936,6 +1977,11 @@ export class ChatService {
       return { error: `Argumentos inválidos para ${name}` }
     }
 
+    // Multi-proyecto: si este chat ya eligió un proyecto, las acciones operan sobre ese.
+    if (phone) proyectoId = this.proyectoActivoChat.get(phone) || proyectoId
+
+    if (name === 'listar_proyectos') return this.toolListarProyectos()
+    if (name === 'seleccionar_proyecto') return this.toolSeleccionarProyecto(args, phone)
     if (name === 'buscar_en_base_de_conocimiento') return this.toolBuscarKb(args.query, res)
     if (name === 'consultar_normativa') return this.toolConsultarNormativa(args.distrito, res)
     if (name === 'analisis_completo') return this.toolAnalisisCompleto(args, res, proyectoId)
@@ -2023,6 +2069,53 @@ export class ChatService {
     return {
       ok: true, proyectoId: p.id, nombre: p.nombre, distrito: distrito || null,
       mensaje: `Proyecto "${p.nombre}"${distrito ? ` (${distrito})` : ''} creado y activo. Los próximos comandos trabajarán sobre este proyecto.`,
+    }
+  }
+
+  /** Proyectos del jefe (dueño del proyecto demo). En producción: el usuario vinculado al chat. */
+  private async proyectosDelJefe(): Promise<{ id: string; nombre: string; distrito?: string }[]> {
+    const jefeId = await this.proyectosService.duenoDe(process.env.WHATSAPP_DEMO_PROYECTO_ID || '').catch(() => null)
+    if (!jefeId) return []
+    const list = await this.proyectosService.findAll(jefeId).catch(() => [] as any[])
+    return list.map((p: any) => ({ id: p.id, nombre: p.nombre, distrito: p.distrito || undefined }))
+  }
+
+  /** Lista los proyectos del jefe para que elija en cuál trabajar (canal chat). */
+  private async toolListarProyectos(): Promise<any> {
+    const proyectos = await this.proyectosDelJefe()
+    if (!proyectos.length) return { proyectos: [], mensaje: 'El jefe aún no tiene proyectos. Ofrece crear uno con crear_proyecto ("crea el proyecto X en Y").' }
+    return {
+      total: proyectos.length,
+      proyectos: proyectos.map((p, i) => ({ n: i + 1, nombre: p.nombre, distrito: p.distrito })),
+      mensaje: 'Muéstrale la lista numerada y pregúntale en cuál quiere trabajar. Cuando elija (número o nombre), usa seleccionar_proyecto.',
+    }
+  }
+
+  /** Fija el proyecto activo de este chat (todas las acciones siguientes operan sobre él). */
+  private async toolSeleccionarProyecto(args: Record<string, any>, phone?: string): Promise<any> {
+    const q = String(args.nombre ?? '').trim()
+    if (!q) return { error: 'Falta indicar el proyecto (nombre o número).' }
+    const proyectos = await this.proyectosDelJefe()
+    if (!proyectos.length) return { error: 'El jefe no tiene proyectos. Ofrece crear uno con crear_proyecto.' }
+
+    const num = parseInt(q, 10)
+    let elegido = (!isNaN(num) && num >= 1 && num <= proyectos.length) ? proyectos[num - 1] : undefined
+    if (!elegido) {
+      const nq = this.normSeg(q)
+      elegido = proyectos.find((p) => this.normSeg(p.nombre) === nq)
+        || proyectos.find((p) => this.normSeg(p.nombre).includes(nq) || nq.includes(this.normSeg(p.nombre)))
+      if (!elegido) {
+        const words = nq.split(/\s+/).filter((w) => w.length > 2)
+        const scored = proyectos.map((p) => ({ p, s: words.filter((w) => this.normSeg(p.nombre).includes(w)).length })).sort((a, b) => b.s - a.s)
+        if (scored[0]?.s > 0) elegido = scored[0].p
+      }
+    }
+    if (!elegido) return { error: `No encontré un proyecto que coincida con "${q}".`, proyectos_disponibles: proyectos.map((p) => p.nombre) }
+    if (phone) this.proyectoActivoChat.set(phone, elegido.id)
+    this.logger.log(`Chat ${phone}: proyecto activo -> "${elegido.nombre}" (${elegido.id})`)
+    return {
+      ok: true, proyecto: elegido.nombre, distrito: elegido.distrito,
+      mensaje: `Listo, ahora trabajamos en "${elegido.nombre}"${elegido.distrito ? ` (${elegido.distrito})` : ''}. Confírmaselo al usuario en 1 línea y pregúntale qué quiere hacer. Desde aquí TODAS las acciones son sobre este proyecto.`,
     }
   }
 
