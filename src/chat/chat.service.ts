@@ -1690,10 +1690,19 @@ export class ChatService {
         return 'No pude entender tu nota de voz 🎤. ¿Puedes repetirla más claro o escribírmela?'
       }
     }
-    // Foto: contenido multimodal para que la IA (GPT-4o visión) la analice
+    // Foto: contenido multimodal para que la IA (GPT-4o visión) la analice Y la
+    // correlacione con las etapas/actividades reales del proyecto (ESTADO ACTUAL).
+    const promptFoto =
+      'Te mandaron una FOTO real de la obra. ANALÍZALA de verdad (sí puedes ver imágenes de construcción). ' +
+      'Haz 3 cosas, breve y natural: ' +
+      '1) Di en 1 línea qué se ve (avance real, maquinaria, elementos, seguridad). ' +
+      '2) Mira el ESTADO ACTUAL de arriba (fases, etapas y actividades de este proyecto) e IDENTIFICA a qué fase/etapa corresponde la foto y qué actividades parecen YA avanzadas o TERMINADAS según la imagen. IMPORTANTE: nombra SOLO actividades que EXISTAN de verdad en el ESTADO ACTUAL (nombre exacto). Si esa fase NO tiene actividades registradas, dilo con claridad y ofrece CREARLAS según lo que ves — NO inventes nombres de actividades que no están en la lista. ' +
+      '3) OFRÉCELE acciones concretas y pregúntale qué quiere: marcar esas actividades como completadas (con actualizar_actividades), agregar actividades/etapas (o partidas del catálogo), o revisar el checklist de seguridad. ' +
+      'Ej con actividades existentes: "Veo que la excavación masiva ya está avanzada. ¿Te marco \'Excavación masiva\' como completada?". Ej sin actividades: "Veo excavación avanzada, pero esta fase aún no tiene actividades cargadas. ¿Te las creo?". NO ejecutes todavía: primero muestra lo que ves y ofrece; actúa solo cuando el usuario confirme. Responde en texto plano, SIN asteriscos dobles (**) ni markdown.' +
+      (texto ? ` Mensaje del usuario junto a la foto: "${texto}"` : '')
     const userContent: any = media?.imageBase64
       ? [
-          { type: 'text', text: texto || 'Analiza esta foto de obra: dime el avance aproximado y si ves temas de seguridad (RNE G.050). Sé breve.' },
+          { type: 'text', text: promptFoto },
           { type: 'image_url', image_url: { url: `data:${media.imageMime || 'image/jpeg'};base64,${media.imageBase64}` } },
         ]
       : (texto || 'Hola')

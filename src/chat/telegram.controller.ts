@@ -37,6 +37,11 @@ export class TelegramController {
         const largest = msg.photo[msg.photo.length - 1] // el último = la mayor resolución
         imageBase64 = (await this.tg.getFileBase64(largest.file_id)) ?? undefined
         imageMime = 'image/jpeg'
+        if (!imageBase64) {
+          // La descarga falló: avisar claro en vez de "analizar" sin imagen.
+          await this.tg.sendMessage(chatId, 'No pude descargar tu foto 📷. ¿Me la reenvías? (a veces Telegram tarda un momento).')
+          return { ok: true }
+        }
       } else if (msg.voice) {
         audioBase64 = (await this.tg.getFileBase64(msg.voice.file_id)) ?? undefined
         audioMime = msg.voice.mime_type || 'audio/ogg'
