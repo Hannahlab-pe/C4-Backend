@@ -1267,15 +1267,16 @@ const C4_TOOLS: LlmTool[] = [
     type: 'function',
     function: {
       name: 'marcar_checklist_seguridad',
-      description: 'Marca un ítem del CHECKLIST DE SEGURIDAD de una fase como cumplido (o pendiente / no aplica / eliminar). Úsala cuando el usuario diga "marca como completado tal ítem de seguridad", "tacha X del checklist", "ya cumplimos con Y". Hace matching DIFUSO por el texto del ítem: si hay varios parecidos devuelve los candidatos para que le confirmes al usuario a cuál se refiere; si no encuentra ninguno, devuelve la lista de ítems disponibles. Requiere la fase — si no la sabes, primero usa consultar_checklist_seguridad o pregúntale al usuario.',
+      description: 'Marca ítems del CHECKLIST DE SEGURIDAD de una fase como cumplido (o pendiente / no aplica / eliminar). Úsala cuando el usuario diga "marca como completado tal ítem", "tacha X del checklist", "ya cumplimos con Y". Para UN ítem: pasa "item" (hace matching DIFUSO por el texto; si hay varios parecidos devuelve candidatos para que confirmes con el usuario; si no encuentra, devuelve la lista). Para TODOS los ítems de una vez (ej. "marca todo el checklist como completado", "ya cumplimos con todo"): pasa todos:true — NO llames la herramienta una vez por cada ítem. Requiere la fase — si no la sabes, usa consultar_checklist_seguridad o pregúntale al usuario. Devuelve cuántos ítems cambió realmente: reporta ese número, no inventes.',
       parameters: {
         type: 'object',
         properties: {
           fase: { type: 'string', description: 'Fase del checklist: demolicion | excavacion | construccion | acabados | administracion' },
-          item: { type: 'string', description: 'Texto (o parte) del ítem a marcar. Ej: "EPP", "charla de seguridad", "plan de emergencias".' },
+          item: { type: 'string', description: 'Texto (o parte) del ítem a marcar. Ej: "EPP", "charla de seguridad", "plan de emergencias". Omítelo si usas todos:true.' },
+          todos: { type: 'boolean', description: 'true = aplica el estado a TODOS los ítems del checklist de esa fase a la vez.' },
           estado: { type: 'string', description: 'Qué hacer: "cumple" (completado, por defecto) | "pendiente" (desmarcar) | "no_aplica" | "eliminar".' },
         },
-        required: ['fase', 'item'],
+        required: ['fase'],
       },
     },
   },
@@ -1671,7 +1672,7 @@ export class ChatService {
       `- CONSULTAS por trabajador o estado: si preguntan "¿qué actividades tiene [nombre]?" o por el estado de una etapa/actividad, responde usando las Actividades del ESTADO ACTUAL (cada una trae su estado y su "Responsable").\n` +
       `- FOTO → ACTUALIZAR: si te mandan una FOTO y piden actualizar el avance (ej. "actualiza la demolición según esta foto"), analiza qué actividades muestra la foto como TERMINADAS y márcalas con la herramienta actualizar_actividades usando sus NOMBRES EXACTOS del ESTADO ACTUAL. Confirma en pocas líneas qué marcaste como completado y qué queda pendiente.\n` +
       `- El ESTADO ACTUAL de arriba es la VERDAD del proyecto AHORA MISMO. NO menciones etapas ni actividades que no estén ahí, aunque en la conversación previa parezca que las creaste (pueden haberse borrado). Nunca digas "completé todas las etapas" salvo que el ESTADO ACTUAL lo muestre al 100%.\n` +
-      `- FIABILIDAD: como SIEMPRE ejecutas la herramienta para las acciones, confirma en una línea SOLO lo que la tool realmente hizo. Nunca afirmes una acción (crear etapa, marcar actividad) sin haber llamado la herramienta.\n` +
+      `- FIABILIDAD (crítico): confirma SOLO lo que la herramienta REALMENTE devolvió y reporta sus NÚMEROS reales (ej. "marqué 3 de 12", el "cambiados" que te da la tool). NUNCA digas "marqué todos" o "100%" si la tool no lo confirmó. Si NO tienes una herramienta para lo que piden (ej. reordenar el checklist, cambiar colores, exportar), DILO con claridad ("eso todavía no lo puedo hacer desde aquí") — NO muestres un resultado simulado (como una lista "ya reordenada") ni des a entender que lo aplicaste. Nunca afirmes una acción sin haber llamado la herramienta y visto su resultado ok.\n` +
       `- CHECKLIST DE SEGURIDAD: para marcar/tachar ítems del checklist de seguridad usa marcar_checklist_seguridad; para verlos, consultar_checklist_seguridad. EXCEPCIÓN a la acción directa: si la herramienta responde "necesita_fase", "ambiguo" o con "candidatos", NO elijas tú — muéstrale al usuario esas opciones (las fases o el texto exacto de los ítems parecidos) y pregúntale a CUÁL se refiere; recién cuando te confirme, márcalo. Si no encuentra el ítem, dile brevemente cuáles hay.\n` +
       `- Si el resultado es largo (un análisis), resume lo clave (TIR, N° de deptos, etc.) en pocas líneas.`
     const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + estadoProyecto + notaWhatsapp
@@ -2645,7 +2646,9 @@ export class ChatService {
     if (!fase) return { necesita_fase: true, error: 'Falta la fase. Pregúntale al usuario a qué fase pertenece el checklist (demolición, excavación, etc.) o usa consultar_checklist_seguridad.' }
 
     const itemQuery = String(args.item ?? '').trim()
-    if (!itemQuery) return { error: 'Falta indicar qué ítem del checklist marcar.' }
+    const marcarTodos = args.todos === true
+      || /^(tod[oa]s?|all|toda la lista|todo el checklist|el checklist|la lista)$/.test(this.normSeg(itemQuery))
+    if (!itemQuery && !marcarTodos) return { error: 'Falta indicar qué ítem del checklist marcar (o pide "todos").' }
 
     let estado = this.normSeg(String(args.estado ?? 'cumple'))
     if (/complet|cumpl|hecho|listo|\bok\b|tach|termin|si\b/.test(estado)) estado = 'cumple'
@@ -2659,6 +2662,32 @@ export class ChatService {
     const prev: any = det?.datos ?? {}
     const checklist: any[] = Array.isArray(prev.checklist) ? prev.checklist : []
     if (!checklist.length) return { error: `La fase ${fase} no tiene checklist de seguridad.` }
+
+    // ── Aplicar a TODOS los ítems de una vez ──
+    if (marcarTodos) {
+      if (estado === 'eliminar') return { error: 'No borro el checklist completo de golpe. Dime el ítem específico a eliminar.' }
+      // Al cumplir "todos", respeto los que están marcados como "no aplica".
+      const nuevoChecklist = checklist.map((c) =>
+        estado === 'cumple' ? (c.estado === 'no_aplica' ? c : { ...c, estado: 'cumple' }) : { ...c, estado })
+      const cambiados = nuevoChecklist.filter((c, i) => c.estado !== checklist[i].estado).length
+      try {
+        res.write(`event:status\ndata:${JSON.stringify({ step: `Actualizando checklist de ${fase}...`, icon: 'shield' })}\n\n`)
+        await this.fasesDetalle.guardar(proyectoId, key, { ...prev, checklist: nuevoChecklist })
+        res.write(`event:seguridad_actualizada\ndata:${JSON.stringify({ fase })}\n\n`)
+        const aplican = nuevoChecklist.filter((c) => c.estado !== 'no_aplica')
+        const pct = aplican.length ? Math.round((aplican.filter((c) => c.estado === 'cumple').length / aplican.length) * 100) : 0
+        this.logger.log(`Checklist seguridad ${fase} de ${proyectoId}: TODOS -> ${estado} (${cambiados} cambiados)`)
+        return {
+          ok: true, fase, todos: true, cambiados, total: checklist.length, cumplimiento_pct: pct,
+          mensaje: cambiados === 0
+            ? `Todos los ítems ya estaban en ese estado. Cumplimiento ${pct}%. Díselo al usuario tal cual (no inventes que cambiaste algo).`
+            : `Actualicé ${cambiados} de ${checklist.length} ítem(s) del checklist de ${fase} a "${estado}". Cumplimiento ahora ${pct}%. Confírmale al usuario cuántos cambiaste (di el número real).`,
+        }
+      } catch (err: any) {
+        this.logger.error('Error marcando checklist (todos):', err?.message)
+        return { error: `Error actualizando el checklist: ${err?.message}` }
+      }
+    }
 
     // Matching difuso por texto del ítem
     const q = this.normSeg(itemQuery)
