@@ -1457,6 +1457,26 @@ const C4_TOOLS: LlmTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'calcular_volumen_excavacion',
+      description: 'Calcula el VOLUMEN DE EXCAVACIÓN: área del terreno × profundidad = volumen en banco, y lo multiplica por el factor de esponjamiento (1.3 en Perú) para el volumen SUELTO a eliminar, más los viajes de volquete. Úsala cuando pregunten cuánto excavar / cuántos volquetes / m³ a eliminar. Saca la PROFUNDIDAD de los documentos (EMS: prof. de cimentación; planos de sótanos: nº de sótanos × altura de entrepiso). Si te falta el área/dimensiones del terreno o la profundidad, la herramienta te dirá qué pedir: pídeselo al usuario, NO inventes números.',
+      parameters: {
+        type: 'object',
+        properties: {
+          area_m2: { type: 'number', description: 'Área del terreno en m² (opcional si das largo y ancho).' },
+          largo_m: { type: 'number', description: 'Largo del terreno en m (si no tienes el área).' },
+          ancho_m: { type: 'number', description: 'Ancho del terreno en m (si no tienes el área).' },
+          profundidad_m: { type: 'number', description: 'Profundidad TOTAL de excavación en m (de los sótanos / cimentación).' },
+          factor_esponjamiento: { type: 'number', description: 'Factor de esponjamiento. Por defecto 1.3 (Perú).' },
+          m3_por_viaje: { type: 'number', description: 'Capacidad del volquete en m³. Por defecto 6.' },
+          fuentes: { type: 'string', description: 'De qué documento/plano salió cada dato, para citarlo (ej: "profundidad del EMS 5673; sótanos del plano de estructuras; dimensiones dadas por el usuario").' },
+        },
+        required: [],
+      },
+    },
+  },
 ]
 
 // Plantilla de etapas por fase (keys = las que usan los registros de generar_proyecto).
@@ -1978,6 +1998,7 @@ export class ChatService {
       `- CALIDAD: para el plan de calidad usa consultar_calidad (ver protocolos y no conformidades), crear_calidad (armar los protocolos de liberación de una fase), liberar_protocolo (marcar un protocolo como liberado u observado) y registrar_no_conformidad (defectos de calidad — ej. desde una FOTO: "veo una cangrejera en la columna, ¿registro una no conformidad?"). Mismo criterio que seguridad: si una tool devuelve "ambiguo", "candidatos" o "necesita_fase", pregúntale al usuario a cuál se refiere antes de actuar.\n` +
       `- LOGÍSTICA (recepción de materiales y control de camiones): aunque te lo digan como simple AVISO ("salió un volquete", "llegó el cemento", "entró el mixer"), LLAMA la tool de inmediato — nunca digas "registré" sin haberla llamado. Material que llegó → registrar_recepcion_material (ej. "llegaron 200 bolsas de cemento"). Camión entrando/saliendo (volquete de desmonte, mixer, entrega) → registrar_camion con tipo ingreso/salida, placa y motivo. La foto que mandaron se adjunta sola como evidencia. Para ver la bitácora → consultar_logistica ("¿qué llegó hoy?", "¿cuántos volquetes salieron?").\n` +
       `- PROYECTOS: el jefe puede tener varios proyectos. Para ver la lista usa listar_proyectos; para cambiar, seleccionar_proyecto. Si dice "lista mis proyectos", "trabaja en el proyecto X", "cambia a Y", úsalas. El proyecto elegido queda activo para todo lo que sigue.\n` +
+      `- VOLUMEN DE EXCAVACIÓN: si preguntan cuánto excavar / cuántos volquetes / m³ a eliminar, usa calcular_volumen_excavacion. Primero saca la PROFUNDIDAD de los documentos que te pasaron (EMS: profundidad de cimentación; planos de sótanos: nº de sótanos × altura). Si te falta el ÁREA/dimensiones del terreno o la profundidad, la tool te lo dirá: PÍDESELO al usuario en un mensaje corto (no inventes medidas). Al dar el resultado, cita de qué archivo salió cada dato, muestra la fórmula y aclara que multiplicaste por 1.3 (esponjamiento en Perú).\n` +
       `- Si el resultado es largo (un análisis), resume lo clave (TIR, N° de deptos, etc.) en pocas líneas.`
     const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + estadoProyecto + notaWhatsapp + seleccionContext
 
@@ -2258,6 +2279,7 @@ export class ChatService {
     if (name === 'registrar_camion') return this.toolRegistrarCamion(args, res, proyectoId, phone)
     if (name === 'consultar_logistica') return this.toolConsultarLogistica(proyectoId)
     if (name === 'cargar_presupuesto') return this.toolCargarPresupuesto(args, res, proyectoId)
+    if (name === 'calcular_volumen_excavacion') return this.toolCalcularVolumenExcavacion(args, res, proyectoId)
 
     return { error: `Tool desconocida: ${name}` }
   }
@@ -2489,41 +2511,52 @@ export class ChatService {
       if (reemplazar) await this.registrosFase.reemplazar(proyectoId, fase, []) // limpia actividades viejas
 
       const usadas = base.map((e) => e.key)
-      const nombresExistentes = new Set(base.map((e) => String(e.nombre).trim().toLowerCase()))
+      // Dedup DIFUSO: "Trazo" ≈ "Trazo y replanteo", "Calzaduras" ≈ "Calzaduras y muros anclados".
+      const normEt = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .replace(/\b(y|de|del|la|el|los|las|en|con)\b/g, ' ').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
+      const coincide = (a: string, b: string) => {
+        const na = normEt(a), nb = normEt(b)
+        if (!na || !nb) return false
+        if (na === nb || na.includes(nb) || nb.includes(na)) return true
+        const wb = new Set(nb.split(' ').filter((w) => w.length > 3))
+        return na.split(' ').filter((w) => w.length > 3).some((w) => wb.has(w))
+      }
       const nuevas: { key: string; nombre: string; descripcion: string; actividades: any[] }[] = []
+      const actsExtra: { key: string; actividad: any }[] = [] // actividades cuya etapa ya existe (no se duplica la etapa)
       for (const e of incoming.slice(0, 14)) {
         const nombre = String(e.nombre).trim().slice(0, 120)
-        if (nombresExistentes.has(nombre.toLowerCase())) continue // evita duplicados por nombre
+        const acts = Array.isArray(e.actividades) ? e.actividades : []
+        const equiv = base.find((x) => coincide(x.nombre, nombre)) || nuevas.find((x) => coincide(x.nombre, nombre))
+        if (equiv) { // ya hay una etapa equivalente → sus actividades van ahí, no dupliques la etapa
+          for (const a of acts) actsExtra.push({ key: equiv.key, actividad: a })
+          continue
+        }
         let key = slug(nombre)
         let i = 2
         while (usadas.includes(key)) key = `${slug(nombre)}-${i++}`
         usadas.push(key)
-        nombresExistentes.add(nombre.toLowerCase())
-        nuevas.push({
-          key, nombre, descripcion: String(e.descripcion ?? '').slice(0, 400),
-          actividades: Array.isArray(e.actividades) ? e.actividades : [],
-        })
+        nuevas.push({ key, nombre, descripcion: String(e.descripcion ?? '').slice(0, 400), actividades: acts })
       }
 
       const merged = [...base, ...nuevas.map((e) => ({ key: e.key, nombre: e.nombre, descripcion: e.descripcion }))]
       await this.fasesDetalle.guardar(proyectoId, detalleKey, { etapas: merged })
 
-      // Crear las actividades (sub-tareas) de cada etapa nueva, etiquetadas con su key
+      // Crear las actividades (sub-tareas), etiquetadas con la key de su etapa (nueva o existente)
       const estadoBase = ESTADO_INICIAL[fase] ?? 'Planificada'
       let totalActs = 0
-      for (const et of nuevas) {
-        for (const a of (et.actividades ?? []).slice(0, 12)) {
-          if (!a?.nombre) continue
-          const datos = (a.datos && typeof a.datos === 'object') ? { ...a.datos } : {}
-          datos.etapa = et.key
-          await this.registrosFase.crear(proyectoId, fase, {
-            nombre: String(a.nombre).slice(0, 200),
-            estado: String(a.estado ?? estadoBase).slice(0, 50),
-            datos,
-          })
-          totalActs++
-        }
+      const crearActividad = async (key: string, a: any) => {
+        if (!a?.nombre) return
+        const datos = (a.datos && typeof a.datos === 'object') ? { ...a.datos } : {}
+        datos.etapa = key
+        await this.registrosFase.crear(proyectoId, fase, {
+          nombre: String(a.nombre).slice(0, 200),
+          estado: String(a.estado ?? estadoBase).slice(0, 50),
+          datos,
+        })
+        totalActs++
       }
+      for (const et of nuevas) for (const a of (et.actividades ?? []).slice(0, 12)) await crearActividad(et.key, a)
+      for (const x of actsExtra.slice(0, 40)) await crearActividad(x.key, x.actividad)
 
       // Checklist de documentos requeridos (append, sin duplicar por nombre)
       let totalDocs = 0
@@ -2548,14 +2581,18 @@ export class ChatService {
       res.write(`event:etapas_creadas\ndata:${JSON.stringify({ fase, total: merged.length })}\n\n`)
       this.logger.log(`Etapas ${fase} de ${proyectoId}: +${nuevas.length} etapas, +${totalActs} acts, +${totalDocs} docs (total ${merged.length})`)
 
+      const mensaje = nuevas.length === 0
+        ? `Esas etapas ya existían o equivalen a las actuales, así que NO dupliqué${actsExtra.length ? `; agregué sus ${totalActs} actividad(es) a las etapas existentes` : ''}. La fase ${fase} tiene ${merged.length} etapas. Díselo tal cual al usuario (no digas que creaste etapas nuevas).`
+        : `Se crearon ${nuevas.length} etapa(s) nueva(s) con ${totalActs} actividad(es)${totalDocs ? ` y ${totalDocs} documento(s) requerido(s)` : ''} en la fase ${fase} (total ${merged.length} etapas). El usuario ya lo ve en el módulo. Confírmaselo con el número real y dile que puede editar/agregar y subir fotos.`
       return {
         ok: true,
         fase,
         etapas_creadas: nuevas.map((e) => e.nombre),
+        etapas_fusionadas: actsExtra.length > 0 || (nuevas.length === 0 && incoming.length > 0),
         total_etapas: merged.length,
         actividades_creadas: totalActs,
         documentos_creados: totalDocs,
-        mensaje: `Se crearon ${nuevas.length} etapa(s) con ${totalActs} actividad(es)${totalDocs ? ` y ${totalDocs} documento(s) requerido(s)` : ''} en la fase ${fase}. El usuario ya lo ve en el módulo (pipeline + cronograma + pestaña Documentos). Confírmaselo y dile que puede editar/agregar lo que necesite y subir fotos en cada etapa.`,
+        mensaje,
       }
     } catch (err: any) {
       this.logger.error('Error creando etapas:', err?.message)
@@ -3092,6 +3129,49 @@ export class ChatService {
     } catch (err: any) {
       this.logger.error('Error cargando presupuesto:', err?.message)
       return { error: `Error cargando el presupuesto: ${err?.message}` }
+    }
+  }
+
+  /** Calcula el volumen de excavación (área × prof × esponjamiento 1.3) + viajes de volquete. Pide datos si faltan. */
+  private async toolCalcularVolumenExcavacion(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const num = (v: any) => (v != null && !isNaN(Number(v)) && Number(v) > 0 ? Number(v) : undefined)
+    const largo = num(args.largo_m), ancho = num(args.ancho_m)
+    const area = num(args.area_m2) ?? (largo && ancho ? largo * ancho : undefined)
+    const prof = num(args.profundidad_m)
+
+    const falta: string[] = []
+    if (!area) falta.push('el ÁREA del terreno en m² (o el largo y ancho en metros)')
+    if (!prof) falta.push('la PROFUNDIDAD total de excavación en metros (o el nº de sótanos y la altura de cada uno)')
+    if (falta.length) {
+      return { necesita_datos: falta, mensaje: `Para calcular el volumen de excavación me falta ${falta.join(' y ')}. Pídeselo al usuario en 1 mensaje corto; NO inventes números.` }
+    }
+
+    const factor = num(args.factor_esponjamiento) ?? 1.3
+    const m3viaje = num(args.m3_por_viaje) ?? 6
+    const volBanco = Math.round(area! * prof!)
+    const volSuelto = Math.round(volBanco * factor)
+    const viajes = Math.ceil(volSuelto / m3viaje)
+    try {
+      const prev: any = (await this.fasesDetalle.obtener(proyectoId, 'excavacion__volumen').catch(() => null))?.datos ?? {}
+      await this.fasesDetalle.guardar(proyectoId, 'excavacion__volumen', {
+        ...prev, area_m2: area, profundidad_m: prof, factor_esponjamiento: factor,
+        vol_banco_m3: volBanco, vol_suelto_m3: volSuelto, viajes_volquete: viajes, m3_por_viaje: m3viaje,
+        fuentes: args.fuentes ? String(args.fuentes).slice(0, 300) : undefined, fecha: this.hoyISO(),
+      })
+      // Deja los viajes como META del contador de desmonte en Logística (lo de Fernando).
+      const logi: any = (await this.fasesDetalle.obtener(proyectoId, 'logistica').catch(() => null))?.datos ?? {}
+      await this.fasesDetalle.guardar(proyectoId, 'logistica', { ...logi, desmonteMetaViajes: viajes, desmonteMetaM3: volSuelto })
+      res.write(`event:etapas_creadas\ndata:${JSON.stringify({ fase: 'excavacion' })}\n\n`)
+      this.logger.log(`Volumen excavación ${proyectoId}: banco ${volBanco} m³, suelto ${volSuelto} m³, ${viajes} viajes`)
+      const fmt = (n: number) => n.toLocaleString('es-PE')
+      return {
+        ok: true, area_m2: area, profundidad_m: prof, factor_esponjamiento: factor,
+        volumen_banco_m3: volBanco, volumen_suelto_m3: volSuelto, viajes_volquete: viajes,
+        mensaje: `Volumen calculado: ${fmt(area!)} m² × ${prof} m = ${fmt(volBanco)} m³ en banco; × ${factor} (esponjamiento típico en Perú) = ${fmt(volSuelto)} m³ SUELTOS a eliminar ≈ ${viajes} viajes de volquete de ${m3viaje} m³. Repórtaselo al usuario CITANDO de qué archivo salió cada dato (${args.fuentes || 'los documentos y lo que indicó'}), muestra la fórmula y aclara que el 1.3 es el factor de esponjamiento en Perú.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error calculando volumen:', err?.message)
+      return { error: `Error calculando el volumen: ${err?.message}` }
     }
   }
 
