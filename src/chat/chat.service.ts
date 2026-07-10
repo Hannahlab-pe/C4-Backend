@@ -1429,6 +1429,34 @@ const C4_TOOLS: LlmTool[] = [
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'cargar_presupuesto',
+      description: 'Carga las partidas de un PRESUPUESTO/METRADOS (leído de un Excel) como actividades de una fase, con su metrado (unidad, cantidad, precio unitario). Úsala DESPUÉS de leer un Excel de presupuesto, cuando el usuario confirme que las cargues. Llama la herramienta UNA VEZ POR FASE con las partidas que le corresponden. No inventes partidas que no estén en la tabla.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fase: { type: 'string', description: 'Slug: demolicion | excavacion | construccion | acabados | administracion' },
+          partidas: {
+            type: 'array',
+            description: 'Partidas de esa fase leídas del presupuesto.',
+            items: {
+              type: 'object',
+              properties: {
+                nombre: { type: 'string', description: 'Descripción de la partida. Ej: "Concreto f\'c=210 en columnas".' },
+                unidad: { type: 'string', description: 'Unidad de metrado: m2 | m3 | und | ml | kg | glb… Opcional.' },
+                cantidad: { type: 'number', description: 'Metrado (cantidad). Opcional.' },
+                precio: { type: 'number', description: 'Precio unitario. Opcional.' },
+              },
+              required: ['nombre'],
+            },
+          },
+        },
+        required: ['fase', 'partidas'],
+      },
+    },
+  },
 ]
 
 // Plantilla de etapas por fase (keys = las que usan los registros de generar_proyecto).
@@ -1565,6 +1593,24 @@ export class ChatService {
       where: { sesionId },
       order: { createdAt: 'ASC' },
     })
+  }
+
+  /** Convierte un Excel (presupuesto/metrados) a texto CSV para que la IA lo lea. */
+  private parseExcel(buffer: Buffer): string {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const XLSX = require('xlsx')
+      const wb = XLSX.read(buffer, { type: 'buffer' })
+      const partes: string[] = []
+      for (const name of (wb.SheetNames as string[]).slice(0, 3)) {
+        const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name], { blankrows: false })
+        if (csv.trim()) partes.push(`### Hoja: ${name}\n${csv.slice(0, 14000)}`)
+      }
+      return partes.join('\n\n')
+    } catch (e: any) {
+      this.logger.warn(`Excel parse falló: ${e?.message}`)
+      return ''
+    }
   }
 
   /** Extrae texto de un PDF. pdf-parse falla en su 1ra llamada por proceso ("bad XRef"); reintenta. */
@@ -1866,7 +1912,7 @@ export class ChatService {
    * agente completo sobre el proyecto demo. El `res` es un objeto fantasma que
    * traga los eventos SSE; las acciones (crear etapas, etc.) SÍ se ejecutan de verdad.
    */
-  async responderWhatsapp(phone: string, userName: string, message: string, media?: { imageBase64?: string; imageMime?: string; audioBase64?: string; audioMime?: string; pdfBase64?: string; pdfName?: string }): Promise<string> {
+  async responderWhatsapp(phone: string, userName: string, message: string, media?: { imageBase64?: string; imageMime?: string; audioBase64?: string; audioMime?: string; pdfBase64?: string; pdfName?: string; excelBase64?: string; excelName?: string }): Promise<string> {
     // /start (o "empezar") reinicia la selección de proyecto y el historial de este chat.
     if (/^\/?(start|empezar)$/i.test((message || '').trim())) { this.proyectoActivoChat.delete(phone); this.whatsappHist.delete(phone) }
 
@@ -1947,6 +1993,20 @@ export class ChatService {
         return `Recibí "${media.pdfName || 'tu PDF'}" 📄 pero no pude extraer texto (parece escaneado o solo imágenes). Si es un plano/escaneo, mándame una FOTO de la hoja y lo analizo por visión.`
       }
     }
+    // Excel: presupuesto/metrados → texto CSV para leer y cargar las partidas.
+    let excelTexto = ''
+    if (media?.excelBase64) {
+      try { excelTexto = this.parseExcel(Buffer.from(media.excelBase64, 'base64')).trim() } catch (e: any) { this.logger.warn(`Excel parse falló: ${e?.message}`) }
+      if (!excelTexto) return `Recibí "${media.excelName || 'tu Excel'}" 📊 pero no pude leer su contenido. ¿Puedes verificar el archivo o pasarme el presupuesto en otro formato?`
+    }
+    const promptExcel =
+      `El usuario subió un PRESUPUESTO / METRADOS en Excel ("${media?.excelName || 'presupuesto'}"). Te paso su contenido en CSV (abajo). Eres el ingeniero asistente: texto plano, sin ** ni markdown.\n` +
+      `1) Identifica las PARTIDAS reales con su metrado: descripción, unidad, cantidad (metrado) y precio unitario (si están). Ignora filas de capítulos, subtotales, títulos y totales.\n` +
+      `2) Clasifica cada partida en su FASE de C4: demolicion | excavacion | construccion | acabados | administracion (según el tipo de trabajo).\n` +
+      `3) Resume en pocas líneas cuántas partidas leíste y el monto total si aparece, y OFRÉCELE cargarlas a la obra. Cuando el usuario confirme (o si ya te dijo "cárgalas"), llama cargar_presupuesto UNA VEZ POR FASE con sus partidas (nombre, unidad, cantidad, precio). NO inventes partidas que no estén en la tabla; reporta el número real que cargues.\n` +
+      (texto ? `\nMensaje del usuario junto al Excel: "${texto}"\n` : '') +
+      `\n===== PRESUPUESTO (CSV) =====\n${excelTexto.slice(0, 16000)}`
+
     const promptPdf =
       `El usuario te envió un DOCUMENTO PDF ("${media?.pdfName || 'documento'}"). Extraje su texto (abajo, puede venir cortado). Eres el ingeniero asistente: responde breve y natural, en texto plano SIN asteriscos dobles (**) ni markdown.\n` +
       `1) Resume en 2-4 líneas lo MÁS relevante: de qué trata y datos clave (partidas, metrados, especificaciones técnicas, fechas, montos, responsables, normas).\n` +
@@ -1961,6 +2021,8 @@ export class ChatService {
         { type: 'text', text: promptFoto },
         { type: 'image_url', image_url: { url: `data:${media.imageMime || 'image/jpeg'};base64,${media.imageBase64}` } },
       ]
+    } else if (excelTexto) {
+      userContent = promptExcel
     } else if (pdfTexto) {
       userContent = promptPdf
     } else {
@@ -1994,7 +2056,7 @@ export class ChatService {
 
     const nuevoHist: LlmMessage[] = [
       ...hist,
-      { role: 'user', content: texto || (media?.pdfBase64 ? `[PDF: ${media?.pdfName || 'documento'}]` : '[foto de obra]') },
+      { role: 'user', content: texto || (media?.excelBase64 ? `[Excel: ${media?.excelName || 'presupuesto'}]` : media?.pdfBase64 ? `[PDF: ${media?.pdfName || 'documento'}]` : '[foto de obra]') },
       { role: 'assistant', content: text },
     ]
     this.whatsappHist.set(phone, nuevoHist.slice(-12))
@@ -2050,6 +2112,13 @@ export class ChatService {
         this.logger.error('Error extrayendo texto de PDF:', err?.message)
         return dto.mensaje
       }
+    }
+
+    // Excel (presupuesto/metrados) → CSV para leer y cargar partidas
+    if (/\.(xlsx|xls|csv)$/.test(nombre) || tipo.includes('sheet') || tipo.includes('excel')) {
+      const csv = this.parseExcel(Buffer.from(dto.archivoBase64, 'base64')).slice(0, 16000)
+      if (!csv.trim()) return `${dto.mensaje}\n\n(No pude leer el Excel adjunto "${dto.archivoNombre ?? ''}".)`
+      return `${dto.mensaje || 'Te paso el presupuesto.'}\n\n---\nPRESUPUESTO / METRADOS en Excel adjunto ("${dto.archivoNombre ?? 'presupuesto.xlsx'}"). Léelo: identifica las PARTIDAS reales con su metrado (descripción, unidad, cantidad, precio), ignora capítulos/subtotales/totales, clasifícalas por fase (demolicion/excavacion/construccion/acabados/administracion) y OFRÉCELE cargarlas con cargar_presupuesto (una vez por fase). No inventes partidas.\n\n===== PRESUPUESTO (CSV) =====\n${csv}`
     }
 
     return dto.mensaje
@@ -2137,6 +2206,7 @@ export class ChatService {
     if (name === 'registrar_recepcion_material') return this.toolRegistrarRecepcionMaterial(args, res, proyectoId, phone)
     if (name === 'registrar_camion') return this.toolRegistrarCamion(args, res, proyectoId, phone)
     if (name === 'consultar_logistica') return this.toolConsultarLogistica(proyectoId)
+    if (name === 'cargar_presupuesto') return this.toolCargarPresupuesto(args, res, proyectoId)
 
     return { error: `Tool desconocida: ${name}` }
   }
@@ -2930,6 +3000,47 @@ export class ChatService {
     } catch (err: any) {
       this.logger.error('Error agregando partidas:', err?.message)
       return { error: `Error agregando partidas: ${err?.message}` }
+    }
+  }
+
+  /** Carga partidas de un presupuesto (con metrado explícito) como actividades de una fase. */
+  private async toolCargarPresupuesto(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const INIT_ESTADO: Record<string, string> = {
+      demolicion: 'Planificada', excavacion: 'Planificada', construccion: 'Programado',
+      acabados: 'En acabados', administracion: 'Por iniciar',
+    }
+    const fase = String(args.fase ?? '').trim().toLowerCase()
+    if (!INIT_ESTADO[fase]) return { error: 'Fase inválida. Usa: ' + Object.keys(INIT_ESTADO).join(', ') }
+    const partidas: any[] = (args.partidas ?? []).filter((p: any) => p?.nombre && String(p.nombre).trim())
+    if (!partidas.length) return { error: 'No hay partidas para cargar en esta fase.' }
+    try {
+      res.write(`event:status\ndata:${JSON.stringify({ step: `Cargando ${partidas.length} partidas del presupuesto en ${fase}...`, icon: 'check' })}\n\n`)
+      let total = 0
+      for (const p of partidas.slice(0, 120)) {
+        const cantidad = p.cantidad != null && !isNaN(Number(p.cantidad)) ? Number(p.cantidad) : undefined
+        const precio = p.precio != null && !isNaN(Number(p.precio)) ? Number(p.precio) : undefined
+        await this.registrosFase.crear(proyectoId, fase, {
+          nombre: String(p.nombre).trim().slice(0, 200),
+          estado: INIT_ESTADO[fase],
+          datos: {
+            unidad: p.unidad ? String(p.unidad).trim().slice(0, 20) : undefined,
+            cantidad, precioUnitario: precio,
+            origen: 'presupuesto',
+          },
+        })
+        total++
+      }
+      res.write(`event:etapas_creadas\ndata:${JSON.stringify({ fase })}\n\n`)
+      this.logger.log(`Presupuesto cargado en ${fase} de ${proyectoId}: ${total} partidas`)
+      const montoFase = partidas.reduce((a, p) => a + ((Number(p.cantidad) || 0) * (Number(p.precio) || 0)), 0)
+      return {
+        ok: true, fase, cargadas: total,
+        monto_fase: montoFase > 0 ? Math.round(montoFase) : undefined,
+        mensaje: `Cargué ${total} partida(s) del presupuesto en ${fase}${montoFase > 0 ? ` (S/ ${Math.round(montoFase).toLocaleString('es-PE')})` : ''}. Aparecen como actividades con su metrado en el módulo de ${fase}. Confírmaselo al usuario con el número real.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error cargando presupuesto:', err?.message)
+      return { error: `Error cargando el presupuesto: ${err?.message}` }
     }
   }
 
