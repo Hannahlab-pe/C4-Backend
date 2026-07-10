@@ -1461,17 +1461,31 @@ const C4_TOOLS: LlmTool[] = [
     type: 'function',
     function: {
       name: 'calcular_volumen_excavacion',
-      description: 'Calcula el VOLUMEN DE EXCAVACIÓN: área del terreno × profundidad = volumen en banco, y lo multiplica por el factor de esponjamiento (1.3 en Perú) para el volumen SUELTO a eliminar, más los viajes de volquete. Úsala cuando pregunten cuánto excavar / cuántos volquetes / m³ a eliminar. Saca la PROFUNDIDAD de los documentos (EMS: prof. de cimentación; planos de sótanos: nº de sótanos × altura de entrepiso). Si te falta el área/dimensiones del terreno o la profundidad, la herramienta te dirá qué pedir: pídeselo al usuario, NO inventes números.',
+      description: 'Calcula el VOLUMEN DE EXCAVACIÓN de forma rigurosa: (1) EXCAVACIÓN MASIVA = área del terreno × profundidad general; (2) SOBRE-EXCAVACIÓN LOCALIZADA = zapatas/cimientos/cisterna que bajan más (de los detalles de cimentación); suma ambas = volumen en banco, y lo multiplica por el factor de esponjamiento (1.3 en Perú) para el volumen SUELTO a eliminar, más los viajes de volquete. Saca la PROFUNDIDAD GENERAL y las cotas de las zapatas de los documentos (EMS / detalles de cimentación: niveles como N.P.T. y N.F.Z.). Si te falta el área/dimensiones del terreno o la profundidad, la herramienta te dirá qué pedir: pídeselo, NO inventes. OJO: sin levantamiento topográfico esto es un ESTIMADO (asume terreno plano); la herramienta te recuerda pedir la topografía para el exacto.',
       parameters: {
         type: 'object',
         properties: {
           area_m2: { type: 'number', description: 'Área del terreno en m² (opcional si das largo y ancho).' },
           largo_m: { type: 'number', description: 'Largo del terreno en m (si no tienes el área).' },
           ancho_m: { type: 'number', description: 'Ancho del terreno en m (si no tienes el área).' },
-          profundidad_m: { type: 'number', description: 'Profundidad TOTAL de excavación en m (de los sótanos / cimentación).' },
+          profundidad_m: { type: 'number', description: 'Profundidad de la EXCAVACIÓN MASIVA general en m (hasta el fondo general, ej. N.P.T.).' },
+          zapatas: {
+            type: 'array',
+            description: 'Zapatas/cimientos que bajan MÁS que el fondo general (sobre-excavación localizada). Cada una: cantidad × largo × ancho × profundidad_extra (lo que baja debajo del fondo general). De los detalles de cimentación.',
+            items: {
+              type: 'object',
+              properties: {
+                cantidad: { type: 'number', description: 'Cuántas zapatas iguales.' },
+                largo_m: { type: 'number', description: 'Largo de la zapata en m.' },
+                ancho_m: { type: 'number', description: 'Ancho de la zapata en m.' },
+                profundidad_extra_m: { type: 'number', description: 'Cuánto baja debajo del fondo general (ej. de -21.40 a -23.40 = 2.0 m).' },
+              },
+            },
+          },
+          volumen_localizado_m3: { type: 'number', description: 'Alternativa: volumen total de sobre-excavación localizada en m³, si ya lo tienes calculado.' },
           factor_esponjamiento: { type: 'number', description: 'Factor de esponjamiento. Por defecto 1.3 (Perú).' },
           m3_por_viaje: { type: 'number', description: 'Capacidad del volquete en m³. Por defecto 6.' },
-          fuentes: { type: 'string', description: 'De qué documento/plano salió cada dato, para citarlo (ej: "profundidad del EMS 5673; sótanos del plano de estructuras; dimensiones dadas por el usuario").' },
+          fuentes: { type: 'string', description: 'De qué documento/plano salió cada dato, para citarlo (ej: "profundidad del EMS 5673; zapatas del detalle de cimentación L09_0111; dimensiones dadas por el usuario").' },
         },
         required: [],
       },
@@ -1998,7 +2012,7 @@ export class ChatService {
       `- CALIDAD: para el plan de calidad usa consultar_calidad (ver protocolos y no conformidades), crear_calidad (armar los protocolos de liberación de una fase), liberar_protocolo (marcar un protocolo como liberado u observado) y registrar_no_conformidad (defectos de calidad — ej. desde una FOTO: "veo una cangrejera en la columna, ¿registro una no conformidad?"). Mismo criterio que seguridad: si una tool devuelve "ambiguo", "candidatos" o "necesita_fase", pregúntale al usuario a cuál se refiere antes de actuar.\n` +
       `- LOGÍSTICA (recepción de materiales y control de camiones): aunque te lo digan como simple AVISO ("salió un volquete", "llegó el cemento", "entró el mixer"), LLAMA la tool de inmediato — nunca digas "registré" sin haberla llamado. Material que llegó → registrar_recepcion_material (ej. "llegaron 200 bolsas de cemento"). Camión entrando/saliendo (volquete de desmonte, mixer, entrega) → registrar_camion con tipo ingreso/salida, placa y motivo. La foto que mandaron se adjunta sola como evidencia. Para ver la bitácora → consultar_logistica ("¿qué llegó hoy?", "¿cuántos volquetes salieron?").\n` +
       `- PROYECTOS: el jefe puede tener varios proyectos. Para ver la lista usa listar_proyectos; para cambiar, seleccionar_proyecto. Si dice "lista mis proyectos", "trabaja en el proyecto X", "cambia a Y", úsalas. El proyecto elegido queda activo para todo lo que sigue.\n` +
-      `- VOLUMEN DE EXCAVACIÓN: si preguntan cuánto excavar / cuántos volquetes / m³ a eliminar, usa calcular_volumen_excavacion. Primero saca la PROFUNDIDAD de los documentos que te pasaron (EMS: profundidad de cimentación; planos de sótanos: nº de sótanos × altura). Si te falta el ÁREA/dimensiones del terreno o la profundidad, la tool te lo dirá: PÍDESELO al usuario en un mensaje corto (no inventes medidas). Al dar el resultado, cita de qué archivo salió cada dato, muestra la fórmula y aclara que multiplicaste por 1.3 (esponjamiento en Perú).\n` +
+      `- VOLUMEN DE EXCAVACIÓN (riguroso): si preguntan cuánto excavar / cuántos volquetes, usa calcular_volumen_excavacion. Sepáralo en (1) EXCAVACIÓN MASIVA = área × profundidad general (fondo N.P.T.), y (2) SOBRE-EXCAVACIÓN de zapatas/cimientos que bajan más (de los detalles de cimentación: cotas como N.F.Z.; pásalas en "zapatas" o en "volumen_localizado_m3"). Saca las profundidades/cotas de los documentos; si falta el área/dimensiones del terreno o la profundidad, PÍDESELO (no inventes). Reporta con DESGLOSE (masiva + localizada), factor 1.3, y sé HONESTO: es un estimado que asume terreno plano; para el EXACTO se necesita el levantamiento topográfico (secciones/cuadrícula, porque el terreno es irregular) — ofrécele calcularlo si te pasa la topografía. Cita de qué archivo salió cada dato.\n` +
       `- Si el resultado es largo (un análisis), resume lo clave (TIR, N° de deptos, etc.) en pocas líneas.`
     const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + estadoProyecto + notaWhatsapp + seleccionContext
 
@@ -3148,26 +3162,43 @@ export class ChatService {
 
     const factor = num(args.factor_esponjamiento) ?? 1.3
     const m3viaje = num(args.m3_por_viaje) ?? 6
-    const volBanco = Math.round(area! * prof!)
+
+    // (1) Excavación masiva = área × profundidad general
+    const volMasiva = Math.round(area! * prof!)
+    // (2) Sobre-excavación localizada (zapatas/cimientos que bajan más que el fondo general)
+    let volLocalizado = num(args.volumen_localizado_m3) ?? 0
+    if (!volLocalizado && Array.isArray(args.zapatas)) {
+      for (const z of args.zapatas) {
+        const c = num(z?.cantidad) ?? 1
+        const l = num(z?.largo_m), a = num(z?.ancho_m), pe = num(z?.profundidad_extra_m)
+        if (l && a && pe) volLocalizado += c * l * a * pe
+      }
+      volLocalizado = Math.round(volLocalizado)
+    }
+    const volBanco = volMasiva + volLocalizado
     const volSuelto = Math.round(volBanco * factor)
     const viajes = Math.ceil(volSuelto / m3viaje)
     try {
       const prev: any = (await this.fasesDetalle.obtener(proyectoId, 'excavacion__volumen').catch(() => null))?.datos ?? {}
       await this.fasesDetalle.guardar(proyectoId, 'excavacion__volumen', {
         ...prev, area_m2: area, profundidad_m: prof, factor_esponjamiento: factor,
+        vol_masiva_m3: volMasiva, vol_localizado_m3: volLocalizado,
         vol_banco_m3: volBanco, vol_suelto_m3: volSuelto, viajes_volquete: viajes, m3_por_viaje: m3viaje,
         fuentes: args.fuentes ? String(args.fuentes).slice(0, 300) : undefined, fecha: this.hoyISO(),
       })
-      // Deja los viajes como META del contador de desmonte en Logística (lo de Fernando).
       const logi: any = (await this.fasesDetalle.obtener(proyectoId, 'logistica').catch(() => null))?.datos ?? {}
       await this.fasesDetalle.guardar(proyectoId, 'logistica', { ...logi, desmonteMetaViajes: viajes, desmonteMetaM3: volSuelto })
       res.write(`event:etapas_creadas\ndata:${JSON.stringify({ fase: 'excavacion' })}\n\n`)
-      this.logger.log(`Volumen excavación ${proyectoId}: banco ${volBanco} m³, suelto ${volSuelto} m³, ${viajes} viajes`)
+      this.logger.log(`Volumen excavación ${proyectoId}: masiva ${volMasiva} + localizado ${volLocalizado} = banco ${volBanco} m³, suelto ${volSuelto} m³, ${viajes} viajes`)
       const fmt = (n: number) => n.toLocaleString('es-PE')
+      const desglose = volLocalizado > 0
+        ? `Excavación masiva: ${fmt(area!)} m² × ${prof} m = ${fmt(volMasiva)} m³. Sobre-excavación localizada (zapatas): ${fmt(volLocalizado)} m³. Total en banco: ${fmt(volBanco)} m³.`
+        : `Excavación masiva: ${fmt(area!)} m² × ${prof} m = ${fmt(volMasiva)} m³ en banco (aún sin sumar la sobre-excavación de zapatas).`
       return {
         ok: true, area_m2: area, profundidad_m: prof, factor_esponjamiento: factor,
+        volumen_masiva_m3: volMasiva, volumen_localizado_m3: volLocalizado,
         volumen_banco_m3: volBanco, volumen_suelto_m3: volSuelto, viajes_volquete: viajes,
-        mensaje: `Volumen calculado: ${fmt(area!)} m² × ${prof} m = ${fmt(volBanco)} m³ en banco; × ${factor} (esponjamiento típico en Perú) = ${fmt(volSuelto)} m³ SUELTOS a eliminar ≈ ${viajes} viajes de volquete de ${m3viaje} m³. Repórtaselo al usuario CITANDO de qué archivo salió cada dato (${args.fuentes || 'los documentos y lo que indicó'}), muestra la fórmula y aclara que el 1.3 es el factor de esponjamiento en Perú.`,
+        mensaje: `${desglose} × ${factor} (esponjamiento en Perú) = ${fmt(volSuelto)} m³ SUELTOS a eliminar ≈ ${viajes} viajes de volquete de ${m3viaje} m³. Repórtalo al usuario CON EL DESGLOSE (masiva + localizada), citando de qué archivo salió cada dato (${args.fuentes || 'los documentos y lo que indicó'}). ${volLocalizado > 0 ? '' : 'Menciona que aún falta sumar la sobre-excavación de las zapatas (de los detalles de cimentación).'} IMPORTANTE, sé honesto: este es un ESTIMADO por volumen de prisma que asume terreno plano; el volumen EXACTO requiere el LEVANTAMIENTO TOPOGRÁFICO (método de secciones o cuadrícula, porque el terreno es irregular) — ofrécele calcularlo exacto si te pasa la topografía.`,
       }
     } catch (err: any) {
       this.logger.error('Error calculando volumen:', err?.message)
