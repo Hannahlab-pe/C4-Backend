@@ -1623,6 +1623,29 @@ export class ChatService {
     }
   }
 
+  /** Texto + nº de páginas de un PDF (para decidir si es un plano y renderizarlo). */
+  private async parsePdfFull(buffer: Buffer): Promise<{ text: string; numpages: number }> {
+    for (let i = 0; i < 2; i++) {
+      try { const d = await pdfParse(buffer); return { text: d.text ?? '', numpages: d.numpages ?? 1 } } catch { /* reintenta */ }
+    }
+    return { text: '', numpages: 1 }
+  }
+
+  /** Renderiza la 1ra página de un PDF (plano) a PNG para que la IA lo VEA por visión. */
+  private async renderPdfPrimeraPagina(buffer: Buffer): Promise<string | null> {
+    try {
+      const { pdf } = await import('pdf-to-img')
+      const doc = await pdf(buffer, { scale: 2 })
+      for await (const page of doc) {
+        return `data:image/png;base64,${(page as Buffer).toString('base64')}`
+      }
+      return null
+    } catch (e: any) {
+      this.logger.warn(`Render de plano falló: ${e?.message}`)
+      return null
+    }
+  }
+
   /** Transcribe audio (dictado por voz) con OpenAI. */
   async transcribir(body: { audioBase64: string; mimeType?: string }): Promise<{ texto: string }> {
     if (!body.audioBase64) return { texto: '' }
@@ -1983,14 +2006,20 @@ export class ChatService {
       'Ej con actividades existentes: "Veo que la excavación masiva ya está avanzada. ¿Te marco \'Excavación masiva\' como completada?". Ej sin actividades: "Veo excavación avanzada, pero esta fase aún no tiene actividades cargadas. ¿Te las creo?". NO ejecutes todavía: primero muestra lo que ves y ofrece; actúa solo cuando el usuario confirme. Responde en texto plano, SIN asteriscos dobles (**) ni markdown.' +
       (texto ? ` Mensaje del usuario junto a la foto: "${texto}"` : '')
 
-    // PDF/documento: extraer el texto y dárselo a la IA para que lo analice, recomiende y actúe.
+    // PDF/documento: extraer el texto y, si es un PLANO (pocas páginas), renderizarlo para que la IA lo VEA.
     let pdfTexto = ''
+    let planoImg: string | null = null
     if (media?.pdfBase64) {
+      const buf = Buffer.from(media.pdfBase64, 'base64')
+      let numpages = 1
       try {
-        pdfTexto = (await this.parsePdf(Buffer.from(media.pdfBase64, 'base64'))).replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 16000)
+        const parsed = await this.parsePdfFull(buf)
+        numpages = parsed.numpages
+        pdfTexto = parsed.text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 16000)
       } catch (e: any) { this.logger.warn(`WhatsApp PDF parse falló: ${e?.message}`) }
-      if (!pdfTexto) {
-        return `Recibí "${media.pdfName || 'tu PDF'}" 📄 pero no pude extraer texto (parece escaneado o solo imágenes). Si es un plano/escaneo, mándame una FOTO de la hoja y lo analizo por visión.`
+      if (numpages <= 5) planoImg = await this.renderPdfPrimeraPagina(buf) // plano / hoja única → visión
+      if (!pdfTexto && !planoImg) {
+        return `Recibí "${media.pdfName || 'tu PDF'}" 📄 pero no pude leerlo (parece escaneado). Mándame una FOTO de la hoja y lo analizo por visión.`
       }
     }
     // Excel: presupuesto/metrados → texto CSV para leer y cargar las partidas.
@@ -2015,11 +2044,24 @@ export class ChatService {
       (texto ? `\nMensaje del usuario junto al PDF: "${texto}"\n` : '') +
       `\n===== TEXTO DEL DOCUMENTO =====\n${pdfTexto}`
 
+    const promptPlano =
+      `El usuario te envió un PDF de pocas páginas ("${media?.pdfName || 'documento'}"). Te lo paso como IMAGEN (LO VES) y también el texto extraído (rótulo, cotas, notas). Eres el ingeniero. IMPORTANTE: responde en TEXTO PLANO, breve — NADA de markdown (ni ##, ni **, ni listas con "-"); como mucho viñetas con "•".\n` +
+      `- Si es un PLANO / dibujo técnico: identifícalo por el rótulo (proyecto, especialidad, código) y describe lo que VES en el dibujo (distribución, ejes, luces entre ejes, elementos, niveles, sección). Extrae datos útiles.\n` +
+      `- Si es un DOCUMENTO de texto (certificado, carta, acta): resúmelo.\n` +
+      `Luego relaciónalo con este proyecto y ofrécele 1-3 acciones concretas (crear actividades de esa especialidad, revisar seguridad/calidad, etc.) y pregunta. No inventes datos que no veas.\n` +
+      (texto ? `\nMensaje del usuario: "${texto}"\n` : '') +
+      (pdfTexto ? `\n===== TEXTO EXTRAÍDO (rótulo/cotas) =====\n${pdfTexto.slice(0, 6000)}` : '')
+
     let userContent: any
     if (media?.imageBase64) {
       userContent = [
         { type: 'text', text: promptFoto },
         { type: 'image_url', image_url: { url: `data:${media.imageMime || 'image/jpeg'};base64,${media.imageBase64}` } },
+      ]
+    } else if (planoImg) {
+      userContent = [
+        { type: 'text', text: promptPlano },
+        { type: 'image_url', image_url: { url: planoImg } },
       ]
     } else if (excelTexto) {
       userContent = promptExcel
@@ -2102,12 +2144,21 @@ export class ChatService {
       ]
     }
 
-    // PDF → extraer texto e inyectar como contexto
+    // PDF → extraer texto; si es un plano (pocas páginas) también renderizarlo para que la IA lo VEA
     if (tipo === 'application/pdf' || nombre.endsWith('.pdf')) {
       try {
         const buffer = Buffer.from(dto.archivoBase64, 'base64')
-        const texto = (await this.parsePdf(buffer)).slice(0, 8000) // máx 8k chars para no saturar el contexto
-        return `${dto.mensaje}\n\n---\n**Archivo adjunto: ${dto.archivoNombre ?? 'documento.pdf'}**\n\`\`\`\n${texto}\n\`\`\``
+        const parsed = await this.parsePdfFull(buffer)
+        const texto = parsed.text.slice(0, 8000)
+        const planoImg = parsed.numpages <= 5 ? await this.renderPdfPrimeraPagina(buffer) : null
+        const txt = `${dto.mensaje || 'Te paso un documento.'}\n\n---\nDocumento adjunto: ${dto.archivoNombre ?? 'documento.pdf'}.${planoImg ? ' Te lo paso TAMBIÉN como imagen: si es un plano, describe lo que VES en el dibujo (ejes, luces, elementos).' : ''}\nTexto extraído:\n${texto}`
+        if (planoImg) {
+          return [
+            { type: 'text', text: txt },
+            { type: 'image_url', image_url: { url: planoImg } },
+          ]
+        }
+        return txt
       } catch (err: any) {
         this.logger.error('Error extrayendo texto de PDF:', err?.message)
         return dto.mensaje
