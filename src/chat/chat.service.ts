@@ -1478,7 +1478,15 @@ export class ChatService {
   private readonly whatsappHist        = new Map<string, LlmMessage[]>() // memoria por número (canal WhatsApp)
   private readonly proyectoActivoChat  = new Map<string, string>()       // número → proyecto activo (canal chat)
   private readonly pendingDocs         = new Map<string, { buffer: Buffer; filename: string; caption?: string }>() // PDF por enviar (canal chat)
-  private readonly lastChatImage       = new Map<string, string>()       // última foto (dataURL) del chat, para adjuntarla al registrar logística
+  private readonly lastChatImage       = new Map<string, { url: string; ttl: number }>() // última foto del chat (con TTL), para adjuntarla al registrar logística aunque se confirme 1-2 mensajes después
+
+  /** Toma (y consume) la última foto del chat para adjuntarla a un registro. */
+  private consumirFotoChat(phone?: string): string | undefined {
+    if (!phone) return undefined
+    const f = this.lastChatImage.get(phone)
+    if (f) this.lastChatImage.delete(phone)
+    return f?.url
+  }
 
   /** El controller (Telegram/WhatsApp) toma el documento pendiente de un chat para enviarlo. */
   takePendingDoc(phone: string): { buffer: Buffer; filename: string; caption?: string } | undefined {
@@ -1921,7 +1929,7 @@ export class ChatService {
     // correlacione con las etapas/actividades reales del proyecto (ESTADO ACTUAL).
     const promptFoto =
       'Te mandaron una FOTO real de la obra. ANALÍZALA de verdad (sí puedes ver imágenes de construcción). ' +
-      'CASO ESPECIAL — LOGÍSTICA: si la foto es de un CAMIÓN (volquete de desmonte, mixer de concreto, camión de entrega) o de MATERIAL que llegó (cemento, fierro, agregados), NO hables de actividades: registra directo con registrar_camion (tipo ingreso/salida, placa, motivo) o registrar_recepcion_material; la foto se adjunta sola como evidencia. Confirma con los datos que ves (placa, material, cantidad). ' +
+      'CASO ESPECIAL — LOGÍSTICA: si la foto es de un CAMIÓN (volquete, mixer, camión de entrega) o de MATERIAL (cemento, fierro, agregados, ladrillos), NO hables de actividades. Primero di en 1 línea QUÉ VES (ej. "veo unas bolsas de cemento Sol" o "un volquete cargado de desmonte"). Luego: si el MENSAJE del usuario ya dice la dirección ("llegó", "salió", "entró"), regístralo directo (registrar_recepcion_material o registrar_camion) — la foto se adjunta sola como evidencia. Si la foto viene SIN contexto de la dirección, NO asumas: PREGUNTA "¿lo registro como recepción (llegó a obra) o como salida?" y pide los datos que falten (cantidad, placa); recién registra cuando el usuario confirme. ' +
       'En cualquier otro caso (avance de obra), haz 3 cosas, breve y natural: ' +
       '1) Di en 1 línea qué se ve (avance real, maquinaria, elementos, seguridad). ' +
       '2) Mira el ESTADO ACTUAL de arriba (fases, etapas y actividades de este proyecto) e IDENTIFICA a qué fase/etapa corresponde la foto y qué actividades parecen YA avanzadas o TERMINADAS según la imagen. IMPORTANTE: nombra SOLO actividades que EXISTAN de verdad en el ESTADO ACTUAL (nombre exacto). Si esa fase NO tiene actividades registradas, dilo con claridad y ofrece CREARLAS según lo que ves — NO inventes nombres de actividades que no están en la lista. ' +
@@ -1959,9 +1967,10 @@ export class ChatService {
       userContent = texto || 'Hola'
     }
 
-    // Guarda la foto de este turno para poder adjuntarla si la IA registra logística (recepción/camión).
-    if (media?.imageBase64) this.lastChatImage.set(phone, `data:${media.imageMime || 'image/jpeg'};base64,${media.imageBase64}`)
-    else this.lastChatImage.delete(phone)
+    // Guarda la foto de este turno para adjuntarla si la IA registra logística (recepción/camión),
+    // aunque el usuario confirme 1-2 mensajes después. TTL de 3 turnos; se consume al registrar.
+    if (media?.imageBase64) this.lastChatImage.set(phone, { url: `data:${media.imageMime || 'image/jpeg'};base64,${media.imageBase64}`, ttl: 3 })
+    else { const cur = this.lastChatImage.get(phone); if (cur && --cur.ttl <= 0) this.lastChatImage.delete(phone) }
 
     const hist = this.whatsappHist.get(phone) ?? []
     const messages: LlmMessage[] = [
@@ -1981,8 +1990,6 @@ export class ChatService {
     } catch (e: any) {
       this.logger.error(`WhatsApp loop error: ${e?.message}`)
       return 'Disculpa, tuve un problema procesando tu mensaje. ¿Puedes repetirlo?'
-    } finally {
-      this.lastChatImage.delete(phone) // la foto solo vale para este turno
     }
 
     const nuevoHist: LlmMessage[] = [
@@ -3241,7 +3248,7 @@ export class ChatService {
       const det = await this.fasesDetalle.obtener(proyectoId, 'logistica').catch(() => null)
       const prev: any = det?.datos ?? {}
       const recepciones: any[] = Array.isArray(prev.recepciones) ? prev.recepciones : []
-      const foto = phone ? this.lastChatImage.get(phone) : undefined
+      const foto = this.consumirFotoChat(phone)
       const nueva = {
         id: this.uidCal(), fecha: this.hoyISO(), hora: new Date().toISOString().slice(11, 16),
         material: material.slice(0, 200),
@@ -3275,7 +3282,7 @@ export class ChatService {
       const det = await this.fasesDetalle.obtener(proyectoId, 'logistica').catch(() => null)
       const prev: any = det?.datos ?? {}
       const camiones: any[] = Array.isArray(prev.camiones) ? prev.camiones : []
-      const foto = phone ? this.lastChatImage.get(phone) : undefined
+      const foto = this.consumirFotoChat(phone)
       const nuevo = {
         id: this.uidCal(), fecha: this.hoyISO(), hora: new Date().toISOString().slice(11, 16),
         tipo, motivo,
