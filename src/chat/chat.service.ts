@@ -214,6 +214,12 @@ MODO J2 — METRADO Y COSTO DE EXCAVACIÓN
 - Si ya calculaste el VOLUMEN, la herramienta arma sola la excavación masiva y la eliminación de desmonte. Tú puedes pasarle una lista más completa en "partidas" con lo que sepas metrar: calzaduras (m²), muros anclados (m²), trazo, perfilado. NO inventes metrados: usa los del volumen, las calzaduras y los planos.
 - Repórtale el desglose y el TOTAL, y aclárale que los precios son REFERENCIALES del mercado limeño (que los ajuste con su APU). Lo ve y edita en la pestaña "Metrado y costo".
 
+MODO J3 — CRONOGRAMA DE OBRA (Gantt de ejecución)
+════════════════════════════════════════════
+- Cuando el usuario pida "arma/genera el cronograma de obra" (con o sin fecha de inicio), usa generar_cronograma. Programa las actividades YA creadas de todas las fases (fases en serie, etapas en serie, actividades de una misma etapa en paralelo). Si no hay actividades, dile que primero arme las etapas/actividades. El usuario ve el Gantt en la pestaña "Cronograma" y ajusta ahí.
+- Cuando pregunten "¿qué está atrasado?", "¿cómo va el cronograma?", "¿qué viene esta semana?" o "¿cuándo termina la obra?", usa consultar_cronograma y repórtale las ATRASADAS primero (fecha de fin + avance), luego lo de esta semana, el avance global y la fecha de fin de obra. Si hay atrasos, sugiere reprogramar o reforzar cuadrilla.
+- Para cambiar la fecha/avance de UNA actividad puntual, usa actualizar_actividades (o dile que lo ajuste con un click en la pestaña Cronograma). Es un cronograma BASE — recuérdale que ajuste lo que va en paralelo.
+
 MODO K — CONTROL DE CONCRETO / VACIADOS (construcción)
 ════════════════════════════════════════════
 - El casco se controla por su concreto. Cuando el ingeniero hable de la construcción/estructura, puedes OFRECER armar el plan de vaciados.
@@ -1261,6 +1267,29 @@ const C4_TOOLS: LlmTool[] = [
         },
         required: [],
       },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'generar_cronograma',
+      description: 'Arma el CRONOGRAMA DE OBRA (Gantt de ejecución) asignando fechas a TODAS las actividades ya creadas de las fases. Úsala cuando el usuario pida "arma/genera el cronograma de obra" y dé (o no) una fecha de inicio. Programa las fases en secuencia (demolición → excavación → construcción → acabados → administración), las etapas en secuencia dentro de cada fase, y las actividades de una misma etapa en paralelo (mismo inicio). Respeta la duración que cada actividad ya tenga; si no tiene, usa "dias_por_actividad". Requiere que YA existan actividades en las fases (si no, dile que primero arme las etapas/actividades). El usuario ve el Gantt en la pestaña "Cronograma" y ajusta lo que va en paralelo.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fecha_inicio: { type: 'string', description: 'Fecha de inicio de obra en formato AAAA-MM-DD (ej. "2026-08-01"). Si el usuario no la da, usa una razonable o la de hoy.' },
+          dias_por_actividad: { type: 'number', description: 'Duración por defecto (días) para actividades que no tengan una definida. Default 4.' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'consultar_cronograma',
+      description: 'Consulta el estado del CRONOGRAMA DE OBRA: qué actividades están ATRASADAS (debían terminar y no están al 100%), cuáles vienen esta semana, el % de avance global y la fecha de fin de obra. Úsala cuando pregunten "¿qué está atrasado?", "¿cómo va el cronograma?", "¿qué viene esta semana?", "¿cuándo termina la obra?".',
+      parameters: { type: 'object', properties: {}, required: [] },
     },
   },
   {
@@ -2497,6 +2526,8 @@ export class ChatService {
     if (name === 'crear_movimiento_tierras') return this.toolCrearMovimientoTierras(args, res, proyectoId)
     if (name === 'registrar_estudio_suelos') return this.toolRegistrarEstudioSuelos(args, res, proyectoId)
     if (name === 'crear_metrado_excavacion') return this.toolCrearMetradoExcavacion(args, res, proyectoId)
+    if (name === 'generar_cronograma') return this.toolGenerarCronograma(args, res, proyectoId)
+    if (name === 'consultar_cronograma') return this.toolConsultarCronograma(proyectoId)
     if (name === 'analizar_cad_dxf') return this.toolAnalizarCadDxf(args, res, proyectoId)
     if (name === 'crear_vaciados') return this.toolCrearVaciados(args, res, proyectoId)
     if (name === 'actualizar_actividades') return this.toolActualizarActividades(args, res, proyectoId)
@@ -3185,6 +3216,109 @@ export class ChatService {
     } catch (err: any) {
       this.logger.error('Error creando metrado:', err?.message)
       return { error: `Error armando el metrado: ${err?.message}` }
+    }
+  }
+
+  // ── Cronograma de obra (Gantt de ejecución) ──
+  private readonly FASES_CRONO = ['demolicion', 'excavacion', 'construccion', 'acabados', 'administracion']
+  private parseFecha(s?: string): Date | null { const d = new Date(`${String(s ?? '').slice(0, 10)}T12:00:00`); return isNaN(d.getTime()) ? null : d }
+  private addDias(d: Date, n: number): Date { return new Date(d.getTime() + n * 86400000) }
+  private fechaISO(d: Date): string { return d.toISOString().slice(0, 10) }
+  private avanceDeRegistro(fase: string, r: any): number {
+    const v = r?.datos?.avance
+    if (v != null && v !== '' && !isNaN(Number(v))) return Math.max(0, Math.min(100, Math.round(Number(v))))
+    const FIN: Record<string, string[]> = { demolicion: ['Completada'], excavacion: ['Completada'], construccion: ['Completado'], acabados: ['Terminado', 'Entregado'], administracion: ['Aprobado'] }
+    if ((FIN[fase] ?? []).includes(r?.estado)) return 100
+    return 0
+  }
+
+  private async toolGenerarCronograma(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const num = (v: any) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0 }
+    const inicio = this.parseFecha(args.fecha_inicio) ?? (() => { const d = new Date(); d.setHours(12, 0, 0, 0); return d })()
+    const diasAct = num(args.dias_por_actividad) || 4
+    let cursor = new Date(inicio)
+    let finObra = new Date(inicio)
+    let total = 0
+    try {
+      res.write(`event:status\ndata:${JSON.stringify({ step: 'Armando el cronograma de obra...', icon: 'calendar' })}\n\n`)
+      for (const fase of this.FASES_CRONO) {
+        const regs = await this.registrosFase.listar(proyectoId, fase).catch(() => [] as any[])
+        if (!regs.length) continue
+        const det = await this.fasesDetalle.obtener(proyectoId, `${fase}__etapas`).catch(() => null)
+        const etapaKeys: string[] = Array.isArray(det?.datos?.etapas) ? det!.datos.etapas.map((e: any) => e.key) : []
+        const orden = etapaKeys.length ? etapaKeys : ['_']
+        const grupos: Record<string, any[]> = Object.fromEntries(orden.map((k) => [k, []]))
+        for (const r of regs) {
+          const k = etapaKeys.includes(r?.datos?.etapa) ? r.datos.etapa : (orden[0])
+          grupos[k].push(r)
+        }
+        for (const k of orden) {
+          const propios = grupos[k] ?? []
+          if (!propios.length) continue
+          const etapaStart = new Date(cursor)
+          let maxDur = 0
+          for (const r of propios) {
+            const dur = num(r?.datos?.duracionDias) || diasAct
+            maxDur = Math.max(maxDur, dur)
+            const datos = { ...(r?.datos ?? {}), fechaInicio: this.fechaISO(etapaStart), duracionDias: dur }
+            await this.registrosFase.actualizar(r.id, { datos }).catch(() => {})
+            total++
+          }
+          cursor = this.addDias(etapaStart, maxDur)
+          if (cursor > finObra) finObra = cursor
+        }
+      }
+      if (!total) return { error: 'No hay actividades creadas en las fases todavía. Primero arma las etapas y actividades (crear_etapas / agregar_partidas / generar_proyecto), y luego genero el cronograma.' }
+      await this.fasesDetalle.guardar(proyectoId, 'cronograma_config', { fechaInicioObra: this.fechaISO(inicio), fecha: this.hoyISO() }).catch(() => {})
+      res.write(`event:cronograma_actualizado\ndata:${JSON.stringify({})}\n\n`)
+      const duracion = Math.round((finObra.getTime() - inicio.getTime()) / 86400000)
+      this.logger.log(`Cronograma ${proyectoId}: ${total} actividades, inicio ${this.fechaISO(inicio)}, fin ${this.fechaISO(finObra)} (${duracion} días)`)
+      return {
+        ok: true, actividades: total, inicio: this.fechaISO(inicio), fin_obra: this.fechaISO(finObra), duracion_dias: duracion,
+        mensaje: `Armé el cronograma de obra: ${total} actividades programadas desde el ${this.fechaISO(inicio)}, con fin estimado el ${this.fechaISO(finObra)} (~${duracion} días). Es una BASE secuencial (fases en serie, etapas en serie, actividades de una misma etapa en paralelo). Repórtaselo al usuario y dile que lo ve en la pestaña "Cronograma" y que ahí ajusta lo que en realidad va en paralelo o con otras fechas. Ofrécele mover/reprogramar actividades si lo pide.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error generando cronograma:', err?.message)
+      return { error: `Error armando el cronograma: ${err?.message}` }
+    }
+  }
+
+  private async toolConsultarCronograma(proyectoId: string): Promise<any> {
+    const num = (v: any) => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
+    const hoy = new Date(); hoy.setHours(12, 0, 0, 0)
+    const en7 = this.addDias(hoy, 7)
+    const atrasadas: any[] = [], estaSemana: any[] = []
+    let totalProg = 0, sumAvance = 0, finObra: Date | null = null
+    try {
+      for (const fase of this.FASES_CRONO) {
+        const regs = await this.registrosFase.listar(proyectoId, fase).catch(() => [] as any[])
+        for (const r of regs) {
+          const ini = this.parseFecha(r?.datos?.fechaInicio)
+          if (!ini) continue
+          totalProg++
+          const dur = Math.max(1, num(r?.datos?.duracionDias))
+          const fin = this.addDias(ini, dur)
+          if (!finObra || fin > finObra) finObra = fin
+          const av = this.avanceDeRegistro(fase, r)
+          sumAvance += av
+          if (fin < hoy && av < 100) atrasadas.push({ actividad: r.nombre, fase, fin: this.fechaISO(fin), avance: av })
+          else if (ini >= hoy && ini <= en7) estaSemana.push({ actividad: r.nombre, fase, inicio: this.fechaISO(ini) })
+        }
+      }
+      if (!totalProg) return { hay_cronograma: false, mensaje: 'Todavía no hay cronograma programado. Dile al usuario que puede armarlo con "arma el cronograma de obra empezando el [fecha]".' }
+      return {
+        hay_cronograma: true,
+        total_programadas: totalProg,
+        avance_global: Math.round(sumAvance / totalProg),
+        fin_obra: finObra ? this.fechaISO(finObra) : null,
+        atrasadas: atrasadas.slice(0, 15),
+        num_atrasadas: atrasadas.length,
+        esta_semana: estaSemana.slice(0, 15),
+        mensaje: `Estado del cronograma: ${totalProg} actividades programadas, avance global ${Math.round(sumAvance / totalProg)}%, fin de obra estimado ${finObra ? this.fechaISO(finObra) : '—'}. Hay ${atrasadas.length} atrasada(s) y ${estaSemana.length} que arrancan esta semana. Repórtaselo al usuario de forma clara y breve: primero las ATRASADAS (con su fecha de fin y avance), luego lo de esta semana. Si hay atrasos, sugiere reprogramar o reforzar cuadrilla.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error consultando cronograma:', err?.message)
+      return { error: `Error consultando el cronograma: ${err?.message}` }
     }
   }
 
