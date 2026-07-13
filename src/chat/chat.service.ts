@@ -3231,10 +3231,20 @@ export class ChatService {
       }
       volLocalizado = Math.round(volLocalizado)
     }
+    // Guard robusto (no depende de que el modelo coopere): un volumen localizado minúsculo frente a
+    // una excavación masiva grande es, con certeza práctica, una estimación INCOMPLETA — la IA no logró
+    // dimensionar las decenas de zapatas/N.F.Z. del plano. Se descarta y se reporta como PENDIENTE,
+    // en vez de dejar pasar un "5 m³" que parezca completo.
+    let descartadoPorPeque = false
+    if (volLocalizado > 0 && volMasiva > 10000 && volLocalizado < 100) {
+      this.logger.warn(`Volumen localizado ${volLocalizado} m³ descartado por insignificante vs masiva ${volMasiva} m³ → zapatas pendientes`)
+      descartadoPorPeque = true
+      volLocalizado = 0
+    }
     // Honestidad: si la IA vio muchas zapatas/N.F.Z. pero no pudo dimensionarlas, se reporta como PENDIENTE
     // (no como un localizado casi cero que parezca completo).
     const numZapVisibles = num(args.num_zapatas_visibles)
-    const zapatasPendientes = args.zapatas_pendientes === true && volLocalizado <= 0
+    const zapatasPendientes = (args.zapatas_pendientes === true || descartadoPorPeque) && volLocalizado <= 0
     const volBanco = volMasiva + volLocalizado
     const volSuelto = Math.round(volBanco * factor)
     const viajes = Math.ceil(volSuelto / m3viaje)
@@ -3274,7 +3284,7 @@ export class ChatService {
       const instruccionZapatas = volLocalizado > 0
         ? ''
         : zapatasPendientes
-          ? 'Reporta con HONESTIDAD que la sobre-excavación de las zapatas quedó PENDIENTE (el plano muestra varias N.F.Z. pero no se pudieron leer sus dimensiones); NO des un número casi cero como si estuviera completo, y pide el cuadro de zapatas / detalle de cimentación.'
+          ? 'Reporta con HONESTIDAD que la sobre-excavación de las zapatas quedó PENDIENTE (el plano muestra varias N.F.Z. pero no se pudieron leer sus dimensiones). NO reportes NINGÚN número para las zapatas (ni "5 m³" ni "casi cero" ni las sumes al total): dilo textualmente como PENDIENTE y pide el cuadro de zapatas / detalle de cimentación. El total en banco que reportes es SOLO la masiva.'
           : 'Menciona que aún falta sumar la sobre-excavación de las zapatas (de los detalles de cimentación).'
       return {
         ok: true, modo: usaSectores ? 'por_niveles' : 'bloque_simple',
