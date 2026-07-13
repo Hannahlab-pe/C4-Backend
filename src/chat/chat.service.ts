@@ -1902,12 +1902,22 @@ export class ChatService {
 
     // Persistir el adjunto del chat como Documento del proyecto: así la IA lo
     // reconoce, queda guardado y puede vincularse a un documento requerido.
-    if (dto.archivoBase64 && dto.archivoTipo) {
+    if (dto.archivoBase64) {
+      // Los .dxf/.dwg suelen llegar SIN tipo MIME desde el navegador → derivarlo del nombre
+      // para no dejar de persistirlos (el DXF es lo que luego lee analizar_cad_dxf).
+      const nombreAdj = dto.archivoNombre ?? 'adjunto'
+      const mime = dto.archivoTipo || (
+        /\.dxf$/i.test(nombreAdj) ? 'application/dxf' :
+        /\.pdf$/i.test(nombreAdj) ? 'application/pdf' :
+        /\.(xlsx|xls)$/i.test(nombreAdj) ? 'application/vnd.ms-excel' :
+        /\.(png|jpe?g|webp)$/i.test(nombreAdj) ? 'image/png' :
+        'application/octet-stream'
+      )
       try {
         await this.documentos.subir({
           proyectoId: dto.proyectoId,
-          nombre: dto.archivoNombre ?? 'adjunto',
-          mimeType: dto.archivoTipo,
+          nombre: nombreAdj,
+          mimeType: mime,
           base64: dto.archivoBase64,
         })
       } catch (e: any) { this.logger.warn(`No se pudo persistir adjunto: ${e?.message}`) }
@@ -2311,10 +2321,10 @@ export class ChatService {
           `Total de entidades: ${r.total_entidades} · total de textos: ${r.total_textos}.`,
           (r.textos?.length) ? `OTROS TEXTOS del plano (muestra):\n- ${r.textos.slice(0, 120).join('\n- ')}` : 'El plano no tiene textos legibles.',
         ].filter(Boolean).join('\n')
-        return `${dto.mensaje}\n\n---\n**Plano DXF adjunto: ${dto.archivoNombre ?? 'plano.dxf'}** — datos extraídos del CAD para que los INTERPRETES (no son míos, vienen del archivo):\n${resumen}`
+        return `${dto.mensaje}\n\n---\n**Plano DXF adjunto: ${dto.archivoNombre ?? 'plano.dxf'}** — datos extraídos del CAD para que los INTERPRETES (no son míos, vienen del archivo):\n${resumen}\n\nPara MEDIR ÁREAS EXACTAS de las regiones cerradas (huella de excavación, terreno) de este DXF, llama a la herramienta analizar_cad_dxf.`
       } catch (err: any) {
         this.logger.error('Error leyendo DXF:', err?.message)
-        return `${dto.mensaje}\n\n(No pude leer el plano DXF adjunto: ${err?.message ?? 'error'}.)`
+        return `${dto.mensaje}\n\n(El DXF "${dto.archivoNombre ?? 'plano.dxf'}" quedó GUARDADO en el proyecto. Para medir las áreas de sus regiones cerradas (huella de excavación / terreno) y sacar los niveles N.P.T., llama a la herramienta analizar_cad_dxf.)`
       }
     }
 
