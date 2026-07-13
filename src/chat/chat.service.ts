@@ -2316,10 +2316,12 @@ export class ChatService {
       if (!excelTexto) return `Recibí "${media.excelName || 'tu Excel'}" 📊 pero no pude leer su contenido. ¿Puedes verificar el archivo o pasarme el presupuesto en otro formato?`
     }
     const promptExcel =
-      `El usuario subió un PRESUPUESTO / METRADOS en Excel ("${media?.excelName || 'presupuesto'}"). Te paso su contenido en CSV (abajo). Eres el ingeniero asistente: texto plano, sin ** ni markdown.\n` +
-      `1) Identifica las PARTIDAS reales con su metrado: descripción, unidad, cantidad (metrado) y precio unitario (si están). Ignora filas de capítulos, subtotales, títulos y totales.\n` +
-      `2) Clasifica cada partida en su FASE de C4: demolicion | excavacion | construccion | acabados | administracion (según el tipo de trabajo).\n` +
-      `3) Resume en pocas líneas cuántas partidas leíste y el monto total si aparece, y OFRÉCELE cargarlas a la obra. Cuando el usuario confirme (o si ya te dijo "cárgalas"), llama cargar_presupuesto UNA VEZ POR FASE con sus partidas (nombre, unidad, cantidad, precio). NO inventes partidas que no estén en la tabla; reporta el número real que cargues.\n` +
+      `El usuario (un ingeniero de obra) subió un PRESUPUESTO / METRADOS en Excel ("${media?.excelName || 'presupuesto'}"). Te paso su contenido en CSV (abajo). Eres el ingeniero asistente experto: texto plano, sin ** ni markdown, claro y útil.\n` +
+      `1) LÉELO como un presupuesto de obra: nombre del proyecto, ubicación, y las PARTIDAS reales con su metrado — descripción, unidad, cantidad (columna METRADO), y precio unitario. OJO: el PU suele ser la suma de M.O + MAT, y el PARCIAL = metrado × PU (si solo hay PARCIAL y metrado, el PU = PARCIAL ÷ metrado). Ignora las filas de capítulos/títulos (ej. "3.0 CONCRETO ARMADO"), subtotales y totales.\n` +
+      `2) Dale un RESUMEN claro: proyecto, monto TOTAL (S/), N° de partidas, y los CAPÍTULOS/estructura que ves (ej. obras provisionales, concreto armado→cimentación/muros/losas, etc.).\n` +
+      `3) Dale 1-3 RECOMENDACIONES como experto: ¿qué cubre y qué NO? (ej. "este presupuesto es solo del CASCO/obra gris; no incluye excavación ni acabados", "las partidas de muros prefabricados dominan el costo"). Sé honesto sobre lo que falta.\n` +
+      `4) Clasifica cada partida en su FASE de C4: demolicion | excavacion | construccion | acabados | administracion (obras provisionales/preliminares → administracion; casco/concreto/muros/losas → construccion; tarrajeo/pisos/pintura → acabados).\n` +
+      `5) OFRÉCELE dos cosas: (a) CARGAR las partidas a la obra (cargar_presupuesto, una vez por fase, con nombre/unidad/cantidad/precio — el precio es el PU), y (b) ARMAR EL CRONOGRAMA con esas partidas (metrado÷rendimiento para el tiempo, metrado×PU para el costo). Cuando confirme, hazlo. NO inventes partidas que no estén en la tabla; reporta los números reales.\n` +
       (texto ? `\nMensaje del usuario junto al Excel: "${texto}"\n` : '') +
       `\n===== PRESUPUESTO (CSV) =====\n${excelTexto.slice(0, 16000)}`
 
@@ -2457,7 +2459,7 @@ export class ChatService {
     if (/\.(xlsx|xls|csv)$/.test(nombre) || tipo.includes('sheet') || tipo.includes('excel')) {
       const csv = this.parseExcel(Buffer.from(dto.archivoBase64, 'base64')).slice(0, 16000)
       if (!csv.trim()) return `${dto.mensaje}\n\n(No pude leer el Excel adjunto "${dto.archivoNombre ?? ''}".)`
-      return `${dto.mensaje || 'Te paso el presupuesto.'}\n\n---\nPRESUPUESTO / METRADOS en Excel adjunto ("${dto.archivoNombre ?? 'presupuesto.xlsx'}"). Léelo: identifica las PARTIDAS reales con su metrado (descripción, unidad, cantidad, precio), ignora capítulos/subtotales/totales, clasifícalas por fase (demolicion/excavacion/construccion/acabados/administracion) y OFRÉCELE cargarlas con cargar_presupuesto (una vez por fase). No inventes partidas.\n\n===== PRESUPUESTO (CSV) =====\n${csv}`
+      return `${dto.mensaje || 'Te paso el presupuesto.'}\n\n---\nPRESUPUESTO / METRADOS en Excel adjunto ("${dto.archivoNombre ?? 'presupuesto.xlsx'}"). Eres el ingeniero experto. (1) Léelo: proyecto, ubicación y las PARTIDAS reales con metrado (descripción, unidad, cantidad, precio unitario = M.O+MAT o PARCIAL÷metrado); ignora capítulos/subtotales/totales. (2) Dale un RESUMEN (proyecto, monto total S/, N° de partidas, capítulos que ves). (3) Dale 1-3 RECOMENDACIONES honestas (qué cubre y qué NO, ej. "solo el casco, falta excavación/acabados"). (4) Clasifica por fase (provisionales/preliminares→administracion; casco/concreto/muros/losas→construccion; tarrajeo/pisos/pintura→acabados). (5) OFRÉCELE cargarlas (cargar_presupuesto, una vez por fase, precio = PU) Y armar el cronograma con ellas (metrado÷rendimiento = tiempo, metrado×PU = costo). No inventes partidas; reporta números reales.\n\n===== PRESUPUESTO (CSV) =====\n${csv}`
     }
 
     return dto.mensaje
@@ -3272,24 +3274,20 @@ export class ChatService {
     const diasAct = num(args.dias_por_actividad) || 4
     const utilACalendario = (util: number) => Math.max(1, Math.ceil(util * 7 / diasSem))
 
-    // Overrides fundamentados por actividad (metrado ÷ rendimiento + costo metrado×PU + orden secuencial) que pasó la IA
-    type Ov = { duracion: number; fundamento?: any; costo?: number; precioUnitario?: number; orden?: number }
+    // Datos crudos por actividad que pasó la IA (metrado, rendimiento, PU, frentes, orden). La duración/costo
+    // se calculan en el loop combinando ESTO con lo que ya trae la actividad (ej. del presupuesto cargado).
+    type Ov = { metrado?: number; rendimiento?: number; pu?: number; frentes?: number; orden?: number; duracionDias?: number; unidad?: string }
     const overrides: { fase: string; nombreNorm: string; ov: Ov }[] = []
     for (const a of (Array.isArray(args.actividades) ? args.actividades : [])) {
       if (!a?.nombre || !a?.fase) continue
-      const metrado = num(a.metrado), rend = num(a.rendimiento_diario), fr = num(a.frentes) || frentesG
-      let duracion: number, fundamento: any = undefined
-      if (metrado && rend) {
-        const util = Math.max(1, Math.ceil(metrado / (rend * fr)))
-        duracion = utilACalendario(util)
-        fundamento = { metrado, unidad: a.unidad ? String(a.unidad).slice(0, 8) : undefined, rendimiento_diario: rend, frentes: fr, dias_utiles: util }
-      } else {
-        duracion = num(a.duracion_dias) || diasAct
-      }
-      const pu = num(a.precio_unitario)
-      const costo = metrado && pu ? Math.round(metrado * pu) : 0
-      const orden = a.orden != null && Number.isFinite(Number(a.orden)) ? Number(a.orden) : undefined
-      overrides.push({ fase: String(a.fase).toLowerCase(), nombreNorm: norm(a.nombre), ov: { duracion, fundamento, costo, precioUnitario: pu || undefined, orden } })
+      overrides.push({
+        fase: String(a.fase).toLowerCase(), nombreNorm: norm(a.nombre), ov: {
+          metrado: num(a.metrado) || undefined, rendimiento: num(a.rendimiento_diario) || undefined,
+          pu: num(a.precio_unitario) || undefined, frentes: num(a.frentes) || undefined,
+          orden: a.orden != null && Number.isFinite(Number(a.orden)) ? Number(a.orden) : undefined,
+          duracionDias: num(a.duracion_dias) || undefined, unidad: a.unidad ? String(a.unidad).slice(0, 8) : undefined,
+        },
+      })
     }
     const buscarOv = (fase: string, nombre: string): Ov | null => {
       const n = norm(nombre)
@@ -3320,29 +3318,44 @@ export class ChatService {
           const propios = grupos[k] ?? []
           if (!propios.length) continue
           const etapaStart = new Date(cursor)
-          // Guardar una actividad con su inicio propio (para poder secuenciar los anillos)
-          const guardar = async (r: any, inicioAct: Date, ov: Ov | null, dur: number) => {
-            const datos: any = { ...(r?.datos ?? {}), fechaInicio: this.fechaISO(inicioAct), duracionDias: dur }
-            if (ov?.fundamento) { datos.fundamentoDuracion = ov.fundamento; conFundamento++ }
-            if (ov?.costo) { datos.costoPresupuestado = ov.costo; if (ov.precioUnitario) datos.precioUnitario = ov.precioUnitario; presupuestoTotal += ov.costo; conCosto++ }
-            await this.registrosFase.actualizar(r.id, { datos }).catch(() => {})
+          // Calcular duración y costo por actividad, combinando lo que pasó la IA (ov) con lo que ya trae la
+          // actividad (ej. del presupuesto: datos.cantidad = metrado, datos.precioUnitario = PU).
+          const items = propios.map((r) => {
+            const ov = buscarOv(fase, r.nombre) ?? {}
+            const metrado = num(ov.metrado) || num(r?.datos?.cantidad) || 0
+            const pu = num(ov.pu) || num(r?.datos?.precioUnitario) || 0
+            const rend = num(ov.rendimiento)
+            const fr = num(ov.frentes) || frentesG
+            let dur: number, fundamento: any = undefined
+            if (metrado && rend) {
+              const util = Math.max(1, Math.ceil(metrado / (rend * fr)))
+              dur = utilACalendario(util)
+              fundamento = { metrado, unidad: ov.unidad || r?.datos?.unidad, rendimiento_diario: rend, frentes: fr, dias_utiles: util }
+            } else {
+              dur = num(ov.duracionDias) || num(r?.datos?.duracionDias) || diasAct
+            }
+            const costo = metrado && pu ? Math.round(metrado * pu) : (num(r?.datos?.costoPresupuestado) || 0)
+            return { r, dur, fundamento, costo, pu: pu || undefined, orden: ov.orden }
+          })
+          const guardar = async (it: typeof items[number], inicioAct: Date) => {
+            const datos: any = { ...(it.r?.datos ?? {}), fechaInicio: this.fechaISO(inicioAct), duracionDias: it.dur }
+            if (it.fundamento) { datos.fundamentoDuracion = it.fundamento; conFundamento++ }
+            if (it.costo) { datos.costoPresupuestado = it.costo; if (it.pu) datos.precioUnitario = it.pu; presupuestoTotal += it.costo; conCosto++ }
+            await this.registrosFase.actualizar(it.r.id, { datos }).catch(() => {})
             total++
           }
           // Separar SECUENCIALES (con "orden", ej. anillos) de PARALELAS (mismo inicio)
-          const items = propios.map((r) => { const ov = buscarOv(fase, r.nombre); return { r, ov, dur: ov ? ov.duracion : (num(r?.datos?.duracionDias) || diasAct) } })
-          const seq = items.filter((it) => it.ov?.orden != null).sort((a, b) => (a.ov!.orden! - b.ov!.orden!))
-          const par = items.filter((it) => it.ov?.orden == null)
+          const seq = items.filter((it) => it.orden != null).sort((a, b) => (a.orden! - b.orden!))
+          const par = items.filter((it) => it.orden == null)
           let etapaEnd = new Date(etapaStart)
-          // Secuenciales: una tras otra desde el inicio de la etapa
           let seqCursor = new Date(etapaStart)
           for (const it of seq) {
-            await guardar(it.r, seqCursor, it.ov, it.dur)
+            await guardar(it, seqCursor)
             seqCursor = this.addDias(seqCursor, it.dur)
             if (seqCursor > etapaEnd) etapaEnd = new Date(seqCursor)
           }
-          // Paralelas: todas arrancan al inicio de la etapa
           for (const it of par) {
-            await guardar(it.r, etapaStart, it.ov, it.dur)
+            await guardar(it, etapaStart)
             const end = this.addDias(etapaStart, it.dur)
             if (end > etapaEnd) etapaEnd = end
           }
@@ -3697,7 +3710,7 @@ export class ChatService {
       return {
         ok: true, fase, cargadas: total,
         monto_fase: montoFase > 0 ? Math.round(montoFase) : undefined,
-        mensaje: `Cargué ${total} partida(s) del presupuesto en ${fase}${montoFase > 0 ? ` (S/ ${Math.round(montoFase).toLocaleString('es-PE')})` : ''}. Aparecen como actividades con su metrado en el módulo de ${fase}. Confírmaselo al usuario con el número real.`,
+        mensaje: `Cargué ${total} partida(s) del presupuesto en ${fase}${montoFase > 0 ? ` (S/ ${Math.round(montoFase).toLocaleString('es-PE')})` : ''}. Aparecen como actividades con su metrado y precio en el módulo de ${fase}. Confírmaselo al usuario con el número real, y OFRÉCELE armar el CRONOGRAMA con estas partidas (generar_cronograma usa el metrado÷rendimiento para el tiempo y el metrado×PU para el costo — solo necesitas confirmar rendimientos y fecha de inicio).`,
       }
     } catch (err: any) {
       this.logger.error('Error cargando presupuesto:', err?.message)
