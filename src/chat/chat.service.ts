@@ -1811,8 +1811,14 @@ export class ChatService {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const XLSX = require('xlsx')
       const wb = XLSX.read(buffer, { type: 'buffer' })
+      // Prioriza las hojas de PARTIDAS/PRESUPUESTO (las que importan) antes que las auxiliares de ratios.
+      const nombres = [...(wb.SheetNames as string[])]
+      nombres.sort((a, b) => {
+        const rank = (n: string) => (/presupuest|partida|metrad/i.test(n) ? 0 : 1)
+        return rank(a) - rank(b)
+      })
       const partes: string[] = []
-      for (const name of (wb.SheetNames as string[]).slice(0, 3)) {
+      for (const name of nombres.slice(0, 3)) {
         const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name], { blankrows: false })
         if (csv.trim()) partes.push(`### Hoja: ${name}\n${csv.slice(0, 14000)}`)
       }
@@ -2316,7 +2322,7 @@ export class ChatService {
       if (!excelTexto) return `Recibí "${media.excelName || 'tu Excel'}" 📊 pero no pude leer su contenido. ¿Puedes verificar el archivo o pasarme el presupuesto en otro formato?`
     }
     const promptExcel =
-      `El usuario (un ingeniero de obra) subió un PRESUPUESTO / METRADOS en Excel ("${media?.excelName || 'presupuesto'}"). Te paso su contenido en CSV (abajo). Eres el ingeniero asistente experto: texto plano, sin ** ni markdown, claro y útil.\n` +
+      `El usuario (un ingeniero de obra) subió un PRESUPUESTO / METRADOS en Excel ("${media?.excelName || 'presupuesto'}"). SU CONTENIDO YA ESTÁ ABAJO en CSV. NO pidas que lo adjunten, ni "¿qué hoja?", ni "¿qué tipo de análisis?": YA lo tienes, ANALÍZALO YA. Puede traer varias hojas — usa la que tiene las PARTIDAS (columnas METRADO/UNIDAD/PARCIAL); ignora hojas de ratios/precios auxiliares. Eres el ingeniero asistente experto: texto plano, sin ** ni markdown, claro y útil.\n` +
       `1) LÉELO como un presupuesto de obra: nombre del proyecto, ubicación, y las PARTIDAS reales con su metrado — descripción, unidad, cantidad (columna METRADO), y precio unitario. OJO: el PU suele ser la suma de M.O + MAT, y el PARCIAL = metrado × PU (si solo hay PARCIAL y metrado, el PU = PARCIAL ÷ metrado). Ignora las filas de capítulos/títulos (ej. "3.0 CONCRETO ARMADO"), subtotales y totales.\n` +
       `2) Dale un RESUMEN claro: proyecto, monto TOTAL (S/), N° de partidas, y los CAPÍTULOS/estructura que ves (ej. obras provisionales, concreto armado→cimentación/muros/losas, etc.).\n` +
       `3) Dale 1-3 RECOMENDACIONES como experto: ¿qué cubre y qué NO? (ej. "este presupuesto es solo del CASCO/obra gris; no incluye excavación ni acabados", "las partidas de muros prefabricados dominan el costo"). Sé honesto sobre lo que falta.\n` +
@@ -2459,7 +2465,7 @@ export class ChatService {
     if (/\.(xlsx|xls|csv)$/.test(nombre) || tipo.includes('sheet') || tipo.includes('excel')) {
       const csv = this.parseExcel(Buffer.from(dto.archivoBase64, 'base64')).slice(0, 16000)
       if (!csv.trim()) return `${dto.mensaje}\n\n(No pude leer el Excel adjunto "${dto.archivoNombre ?? ''}".)`
-      return `${dto.mensaje || 'Te paso el presupuesto.'}\n\n---\nPRESUPUESTO / METRADOS en Excel adjunto ("${dto.archivoNombre ?? 'presupuesto.xlsx'}"). Eres el ingeniero experto. (1) Léelo: proyecto, ubicación y las PARTIDAS reales con metrado (descripción, unidad, cantidad, precio unitario = M.O+MAT o PARCIAL÷metrado); ignora capítulos/subtotales/totales. (2) Dale un RESUMEN (proyecto, monto total S/, N° de partidas, capítulos que ves). (3) Dale 1-3 RECOMENDACIONES honestas (qué cubre y qué NO, ej. "solo el casco, falta excavación/acabados"). (4) Clasifica por fase (provisionales/preliminares→administracion; casco/concreto/muros/losas→construccion; tarrajeo/pisos/pintura→acabados). (5) OFRÉCELE cargarlas (cargar_presupuesto, una vez por fase, precio = PU) Y armar el cronograma con ellas (metrado÷rendimiento = tiempo, metrado×PU = costo). No inventes partidas; reporta números reales.\n\n===== PRESUPUESTO (CSV) =====\n${csv}`
+      return `${dto.mensaje || 'Te paso el presupuesto.'}\n\n---\nEL EXCEL DEL PRESUPUESTO YA ESTÁ ABAJO (su contenido en CSV, "${dto.archivoNombre ?? 'presupuesto.xlsx'}"). NO pidas que lo adjunten ni preguntes "¿qué hoja?" ni "¿qué tipo de análisis?": YA lo tienes, ANALÍZALO DE INMEDIATO en este turno. Puede traer VARIAS hojas — usa la que tiene las PARTIDAS (columnas tipo METRADO / UNIDAD / PARCIAL, ej. la hoja "PRESUPUESTO"); ignora hojas auxiliares de ratios o precios. Eres el ingeniero experto, texto plano sin markdown: (1) RESUMEN: nombre del proyecto, ubicación, monto TOTAL en S/, N° de partidas, y los capítulos que ves. (2) 1-3 RECOMENDACIONES honestas (qué cubre y qué NO, ej. "es solo el casco/obra gris — no incluye excavación ni acabados"; qué partidas pesan más). (3) OFRÉCELE cargar las partidas (cargar_presupuesto, una vez por fase; precio = PU = M.O+MAT o PARCIAL÷metrado) y armar el cronograma. Clasifica por fase (provisionales/preliminares→administracion; concreto/muros/losas/casco→construccion; tarrajeo/pisos/pintura→acabados). NO inventes partidas; reporta números reales.\n\n===== PRESUPUESTO (CSV) =====\n${csv}`
     }
 
     return dto.mensaje
