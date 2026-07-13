@@ -1189,21 +1189,41 @@ const C4_TOOLS: LlmTool[] = [
     type: 'function',
     function: {
       name: 'registrar_estudio_suelos',
-      description: 'Guarda en el módulo de EXCAVACIÓN (pestaña "Estudio de Suelos") los parámetros geotécnicos que EXTRAJISTE de un Estudio de Mecánica de Suelos (EMS, RNE E.050) que el usuario te mandó. Úsala cuando el usuario suba/envíe un EMS y quiera plasmarlo, o cuando lo pida. Extrae los datos del TEXTO del EMS; incluye la unidad dentro del valor (ej. "6.50 kg/cm²", "-8.0 m", "37°"). NO inventes: si un dato no aparece, déjalo vacío. Se rellena la ficha de suelos y el usuario puede ajustarla.',
+      description: 'Guarda en el módulo de EXCAVACIÓN (pestaña "Estudio de Suelos") TODOS los parámetros geotécnicos que EXTRAJISTE de un Estudio de Mecánica de Suelos (EMS, RNE E.050/E.030) que el usuario te mandó. Úsala cuando el usuario suba/envíe un EMS y quiera plasmarlo. Extrae del TEXTO del EMS; incluye la unidad en cada valor (ej. "6.50 kg/cm²", "-8.0 m", "37°"). NO inventes: si un dato no aparece, déjalo vacío. Rellena todos los campos que puedas.',
       parameters: {
         type: 'object',
         properties: {
           laboratorio: { type: 'string', description: 'Laboratorio/empresa que hizo el EMS.' },
           fecha: { type: 'string', description: 'Fecha del EMS (ej. "noviembre 2025").' },
-          tipoSuelo: { type: 'string', description: 'Tipo de suelo con su clasificación SUCS si aparece (ej. "Grava arenosa mal graduada (GP)").' },
-          capacidadPortante: { type: 'string', description: 'Capacidad portante / presión admisible con unidad (ej. "6.50 kg/cm²").' },
+          numeroInforme: { type: 'string', description: 'N° de informe del EMS (ej. "5673").' },
+          ubicacion: { type: 'string', description: 'Dirección/ubicación del terreno estudiado.' },
+          numeroCalicatas: { type: 'string', description: 'N° de calicatas/sondajes/pozos exploratorios (ej. "3 calicatas").' },
+          profundidadInvestigada: { type: 'string', description: 'Hasta qué profundidad se investigó (ej. "24.0 m").' },
+          tipoSuelo: { type: 'string', description: 'Tipo de suelo con clasificación SUCS (ej. "Grava arenosa mal graduada (GP)").' },
+          perfilEstratigrafico: { type: 'string', description: 'Resumen de las capas por profundidad, 1-3 líneas (ej. "0-3.5m: arena limosa; 3.5-11m: grava densa").' },
           nivelFreatico: { type: 'string', description: 'Nivel freático (ej. "No detectado" o "-8.0 m").' },
+          pesoEspecifico: { type: 'string', description: 'Peso específico/volumétrico del suelo γ (ej. "2.10 Ton/m³").' },
+          tipoCimentacion: { type: 'string', description: 'Tipo de cimentación recomendada (ej. "Zapatas aisladas", "Platea").' },
+          capacidadPortante: { type: 'string', description: 'Capacidad portante / presión admisible con unidad (ej. "6.50 kg/cm²").' },
           profCimentacion: { type: 'string', description: 'Profundidad de cimentación/desplante (ej. "-17.50 m").' },
-          agresividad: { type: 'string', description: 'Agresividad de sales al concreto (ej. "Moderada (sulfatos)" o "No agresivo").' },
+          factorSeguridad: { type: 'string', description: 'Factor de seguridad usado (ej. "3.0").' },
+          asentamiento: { type: 'string', description: 'Asentamiento estimado (ej. "2.50 cm").' },
           anguloFriccion: { type: 'string', description: 'Ángulo de fricción interna φ (ej. "37°").' },
           cohesion: { type: 'string', description: 'Cohesión c con unidad (ej. "0.30 kg/cm²").' },
-          asentamiento: { type: 'string', description: 'Asentamiento estimado (ej. "2.50 cm").' },
-          recomendaciones: { type: 'string', description: '1-3 frases clave para excavación/cimentación (tipo de cimentación, desplante, sistema de sostenimiento, freático).' },
+          empujeActivo: { type: 'string', description: 'Coeficiente de empuje activo Ka (ej. "0.25").' },
+          zonaSismica: { type: 'string', description: 'Zona sísmica E.030 (ej. "4").' },
+          factorZ: { type: 'string', description: 'Factor de zona Z (ej. "0.45").' },
+          tipoPerfil: { type: 'string', description: 'Tipo de perfil de suelo E.030 (ej. "S1").' },
+          factorSuelo: { type: 'string', description: 'Factor de suelo S (ej. "1.00").' },
+          periodoTp: { type: 'string', description: 'Período Tp (ej. "0.4 s").' },
+          periodoTl: { type: 'string', description: 'Período Tl (ej. "2.5 s").' },
+          licuacion: { type: 'string', description: 'Potencial de licuación (ej. "No hay").' },
+          colapso: { type: 'string', description: 'Potencial de colapso (ej. "No hay").' },
+          expansion: { type: 'string', description: 'Potencial de expansión (ej. "No hay").' },
+          agresividad: { type: 'string', description: 'Agresividad de sales al concreto (ej. "Moderada (sulfatos)" o "No agresivo").' },
+          tipoCemento: { type: 'string', description: 'Tipo de cemento recomendado (ej. "Tipo I", "Tipo V", "Tipo MS").' },
+          sistemaSostenimiento: { type: 'string', description: 'Sostenimiento temporal recomendado (ej. "Calzaduras", "Muros anclados", "Calzaduras + muros anclados").' },
+          recomendaciones: { type: 'string', description: '1-3 frases clave para excavación/cimentación.' },
         },
         required: [],
       },
@@ -1754,14 +1774,14 @@ export class ChatService {
   }
 
   /** Lee un Estudio de Mecánica de Suelos (PDF) y extrae los parámetros geotécnicos. */
-  async analizarEms(body: { pdfBase64: string; nombre?: string }): Promise<{ datos?: any; error?: string }> {
+  async analizarEms(body: { pdfBase64: string; nombre?: string; proyectoId?: string }): Promise<{ datos?: any; archivoId?: string; archivoNombre?: string; error?: string }> {
     if (!body.pdfBase64) return { error: 'Falta el PDF del EMS.' }
     if (!this.llm.isAgenticProvider()) return { error: 'El análisis del EMS requiere el proveedor OpenAI (GPT-4o).' }
 
     let texto = ''
     try {
       const buffer = Buffer.from(body.pdfBase64, 'base64')
-      texto = (await this.parsePdf(buffer)).slice(0, 14000)
+      texto = (await this.parsePdf(buffer)).slice(0, 20000)
     } catch (e: any) {
       this.logger.error('Error leyendo EMS PDF:', e?.message)
       return { error: 'No pude leer el PDF.' }
@@ -1772,11 +1792,21 @@ export class ChatService {
       {
         role: 'system',
         content:
-          'Eres un ingeniero geotécnico en Lima, Perú. Extrae del Estudio de Mecánica de Suelos (EMS, RNE E.050) los parámetros clave. ' +
-          'Responde EXCLUSIVAMENTE con un objeto JSON válido (sin markdown, sin texto extra) con EXACTAMENTE estas claves (usa "" si el dato no aparece): ' +
-          'laboratorio, fecha, tipoSuelo, capacidadPortante, nivelFreatico, profCimentacion, agresividad, anguloFriccion, cohesion, asentamiento, recomendaciones. ' +
-          'Incluye la unidad dentro del valor (ej: "2.5 kg/cm²", "-8.0 m", "32°"). tipoSuelo con su clasificación SUCS si aparece. ' +
-          'recomendaciones: 1-3 frases clave para la excavación/cimentación (tipo de cimentación, profundidad de desplante, calzaduras, freático). No inventes datos que no estén.',
+          'Eres un ingeniero geotécnico en Lima, Perú. Extrae del Estudio de Mecánica de Suelos (EMS, RNE E.050 y E.030) TODOS los parámetros que encuentres. ' +
+          'Responde EXCLUSIVAMENTE con un objeto JSON válido (sin markdown, sin texto extra) con EXACTAMENTE estas claves (usa "" si el dato no aparece en el texto — NO inventes): ' +
+          'laboratorio, fecha, numeroInforme, ubicacion, numeroCalicatas, profundidadInvestigada, ' +
+          'tipoSuelo, perfilEstratigrafico, nivelFreatico, pesoEspecifico, ' +
+          'tipoCimentacion, capacidadPortante, profCimentacion, factorSeguridad, asentamiento, ' +
+          'anguloFriccion, cohesion, empujeActivo, ' +
+          'zonaSismica, factorZ, tipoPerfil, factorSuelo, periodoTp, periodoTl, ' +
+          'licuacion, colapso, expansion, agresividad, tipoCemento, ' +
+          'sistemaSostenimiento, recomendaciones. ' +
+          'Incluye la unidad dentro del valor (ej: "6.50 kg/cm²", "-8.0 m", "37°", "2.10 Ton/m³", "Z=0.45"). ' +
+          'tipoSuelo con su clasificación SUCS. perfilEstratigrafico: resume las capas por profundidad en 1-3 líneas (ej: "0-3.5m: arena limosa; 3.5-11m: grava arenosa densa"). ' +
+          'numeroCalicatas: cuántas calicatas/sondajes/pozos se hicieron. profundidadInvestigada: hasta qué profundidad se investigó. ' +
+          'licuacion/colapso/expansion: "No hay" / "Sí" / "" según el estudio. agresividad: nivel de sales/sulfatos al concreto. tipoCemento: tipo de cemento recomendado (ej "Tipo I", "Tipo V", "MS"). ' +
+          'sistemaSostenimiento: el sostenimiento temporal recomendado para la excavación (calzaduras, muros anclados, calzaduras+muros, entibado). ' +
+          'recomendaciones: 1-3 frases clave (tipo de cimentación, desplante, sostenimiento, freático, losa del sótano). No inventes datos que no estén en el texto.',
       },
       { role: 'user', content: `Contenido del EMS:\n${texto}` },
     ]
@@ -1788,7 +1818,20 @@ export class ChatService {
       if (!m) return { error: 'No pude interpretar el EMS.' }
       const datos = JSON.parse(m[0])
       this.logger.log(`EMS "${body.nombre ?? ''}" interpretado para proyecto`)
-      return { datos }
+      // Guarda el PDF del EMS para poder abrirlo desde la ficha de suelos
+      let archivoId: string | undefined, archivoNombre: string | undefined
+      if (body.proyectoId) {
+        try {
+          const saved = await this.documentos.guardarArchivo({
+            proyectoId: body.proyectoId,
+            nombre: body.nombre || 'EMS.pdf',
+            mimeType: 'application/pdf',
+            base64: body.pdfBase64,
+          })
+          archivoId = saved.id; archivoNombre = saved.nombre
+        } catch (e: any) { this.logger.warn(`No se pudo guardar el PDF del EMS: ${e?.message}`) }
+      }
+      return { datos, archivoId, archivoNombre }
     } catch (err: any) {
       this.logger.error('Error interpretando EMS:', err?.response?.data?.error?.message ?? err?.message)
       return { error: `No se pudo interpretar el EMS: ${err?.response?.data?.error?.message ?? err?.message}` }
@@ -2929,11 +2972,20 @@ export class ChatService {
 
   /** Plasma en la pestaña "Estudio de Suelos" (key `suelos`) los parámetros geotécnicos que la IA extrajo de un EMS. */
   private async toolRegistrarEstudioSuelos(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
-    const CAMPOS = ['laboratorio', 'fecha', 'tipoSuelo', 'capacidadPortante', 'nivelFreatico', 'profCimentacion', 'agresividad', 'anguloFriccion', 'cohesion', 'asentamiento', 'recomendaciones']
+    const CAMPOS = [
+      'laboratorio', 'fecha', 'numeroInforme', 'ubicacion', 'numeroCalicatas', 'profundidadInvestigada',
+      'tipoSuelo', 'perfilEstratigrafico', 'nivelFreatico', 'pesoEspecifico',
+      'tipoCimentacion', 'capacidadPortante', 'profCimentacion', 'factorSeguridad', 'asentamiento',
+      'anguloFriccion', 'cohesion', 'empujeActivo',
+      'zonaSismica', 'factorZ', 'tipoPerfil', 'factorSuelo', 'periodoTp', 'periodoTl',
+      'licuacion', 'colapso', 'expansion', 'agresividad', 'tipoCemento',
+      'sistemaSostenimiento', 'recomendaciones',
+    ]
+    const largos = new Set(['recomendaciones', 'perfilEstratigrafico'])
     const limpio: Record<string, string> = {}
     for (const k of CAMPOS) {
       const v = args?.[k]
-      if (v != null && String(v).trim()) limpio[k] = String(v).trim().slice(0, k === 'recomendaciones' ? 800 : 120)
+      if (v != null && String(v).trim()) limpio[k] = String(v).trim().slice(0, largos.has(k) ? 800 : 120)
     }
     if (Object.keys(limpio).length === 0) {
       return { error: 'No recibí ningún parámetro del EMS. Extrae del estudio de suelos al menos la capacidad portante, el nivel freático y el tipo de suelo, y vuelve a llamar la herramienta.' }

@@ -53,6 +53,39 @@ export class DocumentosService {
     return this.repo.save(doc)
   }
 
+  /** Guarda un archivo CONSERVANDO su base64 (para poder descargarlo luego, ej. el EMS). */
+  async guardarArchivo(params: {
+    proyectoId: string; nombre: string; mimeType: string; base64: string
+  }): Promise<{ id: string; nombre: string }> {
+    const esPdf = params.mimeType === 'application/pdf'
+    let textoExtraido: string | null = null
+    if (esPdf) {
+      try {
+        const buffer = Buffer.from(params.base64, 'base64')
+        let parsed
+        try { parsed = await pdfParse(buffer) } catch { parsed = await pdfParse(buffer) }
+        textoExtraido = parsed.text?.slice(0, 12000) ?? null
+      } catch { /* ignora */ }
+    }
+    const doc = this.repo.create({
+      proyectoId: params.proyectoId,
+      nombre: params.nombre,
+      tipo: esPdf ? 'pdf' : params.mimeType.startsWith('image/') ? 'image' : 'otro',
+      mimeType: params.mimeType,
+      textoExtraido,
+      base64: params.base64,
+    })
+    const saved = await this.repo.save(doc)
+    return { id: saved.id, nombre: saved.nombre }
+  }
+
+  /** Devuelve un archivo con su base64 para descargarlo. */
+  async obtenerArchivo(id: string): Promise<{ id: string; nombre: string; mimeType: string; base64: string } | null> {
+    const doc = await this.repo.findOne({ where: { id } })
+    if (!doc?.base64) return null
+    return { id: doc.id, nombre: doc.nombre, mimeType: doc.mimeType ?? 'application/octet-stream', base64: doc.base64 }
+  }
+
   /** Último DXF (plano) subido al proyecto, con su base64. */
   async ultimoDxf(proyectoId: string): Promise<{ id: string; nombre: string; base64: string } | null> {
     const doc = await this.repo.findOne({

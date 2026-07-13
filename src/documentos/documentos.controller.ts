@@ -19,6 +19,12 @@ export class DocumentosController {
     return this.svc.subir(dto)
   }
 
+  @Get('archivo/:id')
+  async archivo(@Param('id') id: string) {
+    const doc = await this.svc.obtenerArchivo(id)
+    return doc ?? { error: 'Archivo no encontrado o sin contenido guardado.' }
+  }
+
   @Get(':proyectoId')
   async listar(@Param('proyectoId') proyectoId: string) {
     return this.svc.listar(proyectoId)

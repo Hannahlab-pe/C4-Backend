@@ -51,7 +51,7 @@ export class ChatController {
   }
 
   @Post('analizar-ems')
-  analizarEms(@Body() body: { pdfBase64: string; nombre?: string }) {
+  analizarEms(@Body() body: { pdfBase64: string; nombre?: string; proyectoId?: string }) {
     return this.chat.analizarEms(body)
   }
 
