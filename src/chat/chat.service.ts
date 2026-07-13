@@ -214,11 +214,14 @@ MODO J2 — METRADO Y COSTO DE EXCAVACIÓN
 - Si ya calculaste el VOLUMEN, la herramienta arma sola la excavación masiva y la eliminación de desmonte. Tú puedes pasarle una lista más completa en "partidas" con lo que sepas metrar: calzaduras (m²), muros anclados (m²), trazo, perfilado. NO inventes metrados: usa los del volumen, las calzaduras y los planos.
 - Repórtale el desglose y el TOTAL, y aclárale que los precios son REFERENCIALES del mercado limeño (que los ajuste con su APU). Lo ve y edita en la pestaña "Metrado y costo".
 
-MODO J3 — CRONOGRAMA DE OBRA (Gantt de ejecución)
+MODO J3 — CRONOGRAMA DE OBRA (Gantt profesional, por rendimientos)
 ════════════════════════════════════════════
-- Cuando el usuario pida "arma/genera el cronograma de obra" (con o sin fecha de inicio), usa generar_cronograma. Programa las actividades YA creadas de todas las fases (fases en serie, etapas en serie, actividades de una misma etapa en paralelo). Si no hay actividades, dile que primero arme las etapas/actividades. El usuario ve el Gantt en la pestaña "Cronograma" y ajusta ahí.
-- Cuando pregunten "¿qué está atrasado?", "¿cómo va el cronograma?", "¿qué viene esta semana?" o "¿cuándo termina la obra?", usa consultar_cronograma y repórtale las ATRASADAS primero (fecha de fin + avance), luego lo de esta semana, el avance global y la fecha de fin de obra. Si hay atrasos, sugiere reprogramar o reforzar cuadrilla.
-- Para cambiar la fecha/avance de UNA actividad puntual, usa actualizar_actividades (o dile que lo ajuste con un click en la pestaña Cronograma). Es un cronograma BASE — recuérdale que ajuste lo que va en paralelo.
+- Un cronograma serio NO inventa duraciones. La regla de oro: DURACIÓN (días útiles) = METRADO ÷ (RENDIMIENTO diario de la cuadrilla × N° de frentes en paralelo). Luego se pasa a días calendario según la jornada (días/semana).
+- Cuando el usuario pida "arma/genera el cronograma", NO lo generes de una: PRIMERO hazle 3-4 preguntas clave en un mensaje breve: (1) fecha de inicio de obra, (2) jornada (¿6 días/semana?), (3) cuántos FRENTES/cuadrillas en paralelo maneja, (4) avísale que para las partidas grandes vas a usar el METRADO ya cargado y RENDIMIENTOS referenciales de CAPECO que él puede ajustar. Espera su respuesta.
+- Cuando responda, propón los rendimientos de las partidas principales (usa la tabla de abajo, dile los valores y que confirme/ajuste), y RECIÉN llama generar_cronograma pasándole "actividades" con {nombre, fase, metrado, unidad, rendimiento_diario} para las partidas grandes (el metrado sácalo del ESTADO/metrado ya cargado; NO inventes metrados). La herramienta calcula la duración por metrado÷rendimiento y la programa. Explícale el fundamento (ej. "excavación 62,465 m³ ÷ 400 m³/día ÷ 2 frentes = 78 días útiles").
+- RENDIMIENTOS referenciales CAPECO (Perú, por cuadrilla-día — el usuario los ajusta): excavación masiva a máquina ~350-500 m³/día; excavación manual ~4 m³/día·cuadrilla; eliminación de desmonte ~200-300 m³/día; calzaduras ~2 paños/día; muros anclados ~20-30 m²/día o 1-2 anclajes/día; demolición estructural ~25-40 m³/día; concreto (vaciado) ~15-25 m³/día; encofrado ~12-18 m²/día; acero (habilitado+armado) ~250-300 kg/día; albañilería (muro) ~10 m²/día·operario; tarrajeo ~14 m²/día·operario; contrapiso/piso ~40 m²/día; instalaciones ~variable (pregunta). Son referenciales — SIEMPRE dile que los confirme.
+- Cuando pregunten "¿qué está atrasado?", "¿cómo va el cronograma?", "¿qué viene esta semana?" o "¿cuándo termina la obra?", usa consultar_cronograma: reporta las ATRASADAS primero (fecha de fin + avance), luego lo de esta semana (look-ahead), el avance global y la fecha de fin. Si hay atrasos, sugiere reprogramar o reforzar cuadrilla/frentes.
+- Para cambiar fecha/avance de UNA actividad puntual, usa actualizar_actividades (o dile que la edite con un click en la pestaña Cronograma).
 
 MODO K — CONTROL DE CONCRETO / VACIADOS (construcción)
 ════════════════════════════════════════════
@@ -1273,12 +1276,31 @@ const C4_TOOLS: LlmTool[] = [
     type: 'function',
     function: {
       name: 'generar_cronograma',
-      description: 'Arma el CRONOGRAMA DE OBRA (Gantt de ejecución) asignando fechas a TODAS las actividades ya creadas de las fases. Úsala cuando el usuario pida "arma/genera el cronograma de obra" y dé (o no) una fecha de inicio. Programa las fases en secuencia (demolición → excavación → construcción → acabados → administración), las etapas en secuencia dentro de cada fase, y las actividades de una misma etapa en paralelo (mismo inicio). Respeta la duración que cada actividad ya tenga; si no tiene, usa "dias_por_actividad". Requiere que YA existan actividades en las fases (si no, dile que primero arme las etapas/actividades). El usuario ve el Gantt en la pestaña "Cronograma" y ajusta lo que va en paralelo.',
+      description: 'Arma el CRONOGRAMA DE OBRA (Gantt) programando las actividades ya creadas de las fases. LO PROFESIONAL: la duración de cada actividad se calcula con DURACIÓN(días útiles) = METRADO ÷ (RENDIMIENTO diario × N° de frentes/cuadrillas), y se convierte a días calendario según la jornada (días/semana). PRIMERO pregúntale al usuario lo necesario (fecha de inicio, jornada días/semana, frentes en paralelo) y confírmale los RENDIMIENTOS de las partidas principales (propón los de CAPECO; ver la tabla del sistema); RECIÉN luego llama esta herramienta pasándole "actividades" con su metrado y rendimiento. Si no pasas "actividades", usa un default por actividad (menos preciso). Programa fases en serie, etapas en serie, y actividades de una misma etapa en paralelo. El usuario ve el Gantt en la pestaña "Cronograma".',
       parameters: {
         type: 'object',
         properties: {
-          fecha_inicio: { type: 'string', description: 'Fecha de inicio de obra en formato AAAA-MM-DD (ej. "2026-08-01"). Si el usuario no la da, usa una razonable o la de hoy.' },
-          dias_por_actividad: { type: 'number', description: 'Duración por defecto (días) para actividades que no tengan una definida. Default 4.' },
+          fecha_inicio: { type: 'string', description: 'Fecha de inicio de obra AAAA-MM-DD (ej. "2026-08-01").' },
+          dias_semana: { type: 'number', description: 'Jornada: días laborables por semana (Perú suele 6). Convierte días útiles a calendario. Default 6.' },
+          frentes: { type: 'number', description: 'N° de frentes/cuadrillas trabajando en paralelo por defecto (acelera). Default 1.' },
+          dias_por_actividad: { type: 'number', description: 'Solo si NO pasas metrado/rendimiento: duración por defecto por actividad en días. Default 4.' },
+          actividades: {
+            type: 'array',
+            description: 'Actividades a programar con su fundamento. Da esto tras confirmar metrados y rendimientos con el usuario. Cada una se empareja con la actividad ya creada por su nombre y fase.',
+            items: {
+              type: 'object',
+              properties: {
+                nombre: { type: 'string', description: 'Nombre de la actividad tal como está creada (para emparejar).' },
+                fase: { type: 'string', description: 'Fase: demolicion, excavacion, construccion, acabados o administracion.' },
+                metrado: { type: 'number', description: 'Cantidad de la partida (del metrado ya cargado). Ej. 62465 (m³), 850 (m²).' },
+                unidad: { type: 'string', description: 'Unidad del metrado (m3, m2, ml, und...).' },
+                rendimiento_diario: { type: 'number', description: 'Rendimiento diario de UNA cuadrilla en esa unidad (de CAPECO o confirmado por el usuario). Ej. 400 (m³/día excavación masiva).' },
+                frentes: { type: 'number', description: 'Cuadrillas en paralelo para ESTA actividad (si difiere del global).' },
+                duracion_dias: { type: 'number', description: 'Alternativa: duración en días calendario ya calculada, si no das metrado/rendimiento.' },
+              },
+              required: ['nombre', 'fase'],
+            },
+          },
         },
         required: [],
       },
@@ -3234,11 +3256,41 @@ export class ChatService {
 
   private async toolGenerarCronograma(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
     const num = (v: any) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0 }
+    const norm = (s: string) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
     const inicio = this.parseFecha(args.fecha_inicio) ?? (() => { const d = new Date(); d.setHours(12, 0, 0, 0); return d })()
+    const diasSem = Math.min(7, Math.max(1, num(args.dias_semana) || 6))
+    const frentesG = num(args.frentes) || 1
     const diasAct = num(args.dias_por_actividad) || 4
+    const utilACalendario = (util: number) => Math.max(1, Math.ceil(util * 7 / diasSem))
+
+    // Overrides fundamentados por actividad (metrado ÷ rendimiento) que pasó la IA
+    type Ov = { duracion: number; fundamento?: any }
+    const overrides: { fase: string; nombreNorm: string; ov: Ov }[] = []
+    for (const a of (Array.isArray(args.actividades) ? args.actividades : [])) {
+      if (!a?.nombre || !a?.fase) continue
+      const metrado = num(a.metrado), rend = num(a.rendimiento_diario), fr = num(a.frentes) || frentesG
+      let duracion: number, fundamento: any = undefined
+      if (metrado && rend) {
+        const util = Math.max(1, Math.ceil(metrado / (rend * fr)))
+        duracion = utilACalendario(util)
+        fundamento = { metrado, unidad: a.unidad ? String(a.unidad).slice(0, 8) : undefined, rendimiento_diario: rend, frentes: fr, dias_utiles: util }
+      } else {
+        duracion = num(a.duracion_dias) || diasAct
+      }
+      overrides.push({ fase: String(a.fase).toLowerCase(), nombreNorm: norm(a.nombre), ov: { duracion, fundamento } })
+    }
+    const buscarOv = (fase: string, nombre: string): Ov | null => {
+      const n = norm(nombre)
+      const cands = overrides.filter((o) => o.fase === fase)
+      const exacto = cands.find((o) => o.nombreNorm === n)
+      if (exacto) return exacto.ov
+      const parcial = cands.find((o) => o.nombreNorm && (n.includes(o.nombreNorm) || o.nombreNorm.includes(n)))
+      return parcial?.ov ?? null
+    }
+
     let cursor = new Date(inicio)
     let finObra = new Date(inicio)
-    let total = 0
+    let total = 0, conFundamento = 0
     try {
       res.write(`event:status\ndata:${JSON.stringify({ step: 'Armando el cronograma de obra...', icon: 'calendar' })}\n\n`)
       for (const fase of this.FASES_CRONO) {
@@ -3258,9 +3310,11 @@ export class ChatService {
           const etapaStart = new Date(cursor)
           let maxDur = 0
           for (const r of propios) {
-            const dur = num(r?.datos?.duracionDias) || diasAct
+            const ov = buscarOv(fase, r.nombre)
+            const dur = ov ? ov.duracion : (num(r?.datos?.duracionDias) || diasAct)
             maxDur = Math.max(maxDur, dur)
-            const datos = { ...(r?.datos ?? {}), fechaInicio: this.fechaISO(etapaStart), duracionDias: dur }
+            const datos: any = { ...(r?.datos ?? {}), fechaInicio: this.fechaISO(etapaStart), duracionDias: dur }
+            if (ov?.fundamento) { datos.fundamentoDuracion = ov.fundamento; conFundamento++ }
             await this.registrosFase.actualizar(r.id, { datos }).catch(() => {})
             total++
           }
@@ -3269,13 +3323,16 @@ export class ChatService {
         }
       }
       if (!total) return { error: 'No hay actividades creadas en las fases todavía. Primero arma las etapas y actividades (crear_etapas / agregar_partidas / generar_proyecto), y luego genero el cronograma.' }
-      await this.fasesDetalle.guardar(proyectoId, 'cronograma_config', { fechaInicioObra: this.fechaISO(inicio), fecha: this.hoyISO() }).catch(() => {})
+      await this.fasesDetalle.guardar(proyectoId, 'cronograma_config', { fechaInicioObra: this.fechaISO(inicio), diasSemana: diasSem, frentes: frentesG, fecha: this.hoyISO() }).catch(() => {})
       res.write(`event:cronograma_actualizado\ndata:${JSON.stringify({})}\n\n`)
       const duracion = Math.round((finObra.getTime() - inicio.getTime()) / 86400000)
-      this.logger.log(`Cronograma ${proyectoId}: ${total} actividades, inicio ${this.fechaISO(inicio)}, fin ${this.fechaISO(finObra)} (${duracion} días)`)
+      this.logger.log(`Cronograma ${proyectoId}: ${total} act (${conFundamento} con rendimiento), inicio ${this.fechaISO(inicio)}, fin ${this.fechaISO(finObra)} (${duracion} días, jornada ${diasSem}/sem)`)
+      const nota = conFundamento
+        ? `${conFundamento} de ${total} actividades tienen la duración CALCULADA por metrado ÷ rendimiento (las demás usaron un estimado).`
+        : `Las duraciones son un ESTIMADO por defecto — para el número real, dame el metrado y el rendimiento de las partidas principales y lo recalculo por metrado÷rendimiento.`
       return {
-        ok: true, actividades: total, inicio: this.fechaISO(inicio), fin_obra: this.fechaISO(finObra), duracion_dias: duracion,
-        mensaje: `Armé el cronograma de obra: ${total} actividades programadas desde el ${this.fechaISO(inicio)}, con fin estimado el ${this.fechaISO(finObra)} (~${duracion} días). Es una BASE secuencial (fases en serie, etapas en serie, actividades de una misma etapa en paralelo). Repórtaselo al usuario y dile que lo ve en la pestaña "Cronograma" y que ahí ajusta lo que en realidad va en paralelo o con otras fechas. Ofrécele mover/reprogramar actividades si lo pide.`,
+        ok: true, actividades: total, con_fundamento: conFundamento, inicio: this.fechaISO(inicio), fin_obra: this.fechaISO(finObra), duracion_dias: duracion, jornada_dias_semana: diasSem, frentes: frentesG,
+        mensaje: `Armé el cronograma de obra: ${total} actividades desde el ${this.fechaISO(inicio)}, fin estimado ${this.fechaISO(finObra)} (~${duracion} días calendario, jornada ${diasSem} días/sem). ${nota} Programación: fases en serie, etapas en serie, actividades de una etapa en paralelo. Repórtaselo al usuario con la fecha de fin y el fundamento (que las duraciones grandes salen de metrado÷rendimiento), y dile que lo ve/ajusta en la pestaña "Cronograma". Si faltan rendimientos, ofrécele confirmarlos para afinar.`,
       }
     } catch (err: any) {
       this.logger.error('Error generando cronograma:', err?.message)
