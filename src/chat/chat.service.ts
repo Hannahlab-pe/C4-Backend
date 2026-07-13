@@ -189,6 +189,11 @@ MODO H — COLINDANTES / VECINOS (clave legal en demolición)
 - Si acepta, llama a crear_colindantes con los vecinos que mencione (nombre/posición, ubicación, estado previo si lo sabe). Avísale que en la pestaña Colindantes sube las fotos ANTES y DESPUÉS, marca el acta firmada y registra cualquier reclamo.
 - Si te lo pide, redacta el texto del acta de constatación tipo. Recálcale: la foto/acta ANTES es la que lo protege legalmente.
 
+MODO H2 — ESTUDIO DE SUELOS / EMS (excavación)
+════════════════════════════════════════════
+- El EMS (RNE E.050) es la base de toda la excavación y cimentación. Cuando el usuario te MANDE o suba un Estudio de Mecánica de Suelos (o un PDF que claramente lo sea), EXTRAE del texto los parámetros geotécnicos y llama a registrar_estudio_suelos para plasmarlos en la pestaña "Estudio de Suelos" del módulo de Excavación: capacidad portante/presión admisible, nivel freático, profundidad de cimentación, tipo de suelo (SUCS), agresividad de sales, ángulo de fricción (φ), cohesión (c), asentamiento, laboratorio, fecha y 1-3 recomendaciones. Incluye la unidad en cada valor. NO inventes: deja vacío lo que no aparezca.
+- Después, si el EMS recomienda un sistema de sostenimiento (calzaduras o muros anclados) o da la profundidad, OFRÉCELE armar las etapas/calzaduras/movimiento de tierras con esos datos.
+
 MODO I — CALZADURAS (excavación entre medianeras)
 ════════════════════════════════════════════
 - En excavación urbana en Lima se excava entre vecinos: primero hay que CALZAR las cimentaciones de los predios colindantes (RNE E.050) para que no se asienten/colapsen.
@@ -1177,6 +1182,30 @@ const C4_TOOLS: LlmTool[] = [
           esponjamiento: { type: 'number', description: 'Factor de esponjamiento del material (default 1.25).' },
         },
         required: ['sotanos'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'registrar_estudio_suelos',
+      description: 'Guarda en el módulo de EXCAVACIÓN (pestaña "Estudio de Suelos") los parámetros geotécnicos que EXTRAJISTE de un Estudio de Mecánica de Suelos (EMS, RNE E.050) que el usuario te mandó. Úsala cuando el usuario suba/envíe un EMS y quiera plasmarlo, o cuando lo pida. Extrae los datos del TEXTO del EMS; incluye la unidad dentro del valor (ej. "6.50 kg/cm²", "-8.0 m", "37°"). NO inventes: si un dato no aparece, déjalo vacío. Se rellena la ficha de suelos y el usuario puede ajustarla.',
+      parameters: {
+        type: 'object',
+        properties: {
+          laboratorio: { type: 'string', description: 'Laboratorio/empresa que hizo el EMS.' },
+          fecha: { type: 'string', description: 'Fecha del EMS (ej. "noviembre 2025").' },
+          tipoSuelo: { type: 'string', description: 'Tipo de suelo con su clasificación SUCS si aparece (ej. "Grava arenosa mal graduada (GP)").' },
+          capacidadPortante: { type: 'string', description: 'Capacidad portante / presión admisible con unidad (ej. "6.50 kg/cm²").' },
+          nivelFreatico: { type: 'string', description: 'Nivel freático (ej. "No detectado" o "-8.0 m").' },
+          profCimentacion: { type: 'string', description: 'Profundidad de cimentación/desplante (ej. "-17.50 m").' },
+          agresividad: { type: 'string', description: 'Agresividad de sales al concreto (ej. "Moderada (sulfatos)" o "No agresivo").' },
+          anguloFriccion: { type: 'string', description: 'Ángulo de fricción interna φ (ej. "37°").' },
+          cohesion: { type: 'string', description: 'Cohesión c con unidad (ej. "0.30 kg/cm²").' },
+          asentamiento: { type: 'string', description: 'Asentamiento estimado (ej. "2.50 cm").' },
+          recomendaciones: { type: 'string', description: '1-3 frases clave para excavación/cimentación (tipo de cimentación, desplante, sistema de sostenimiento, freático).' },
+        },
+        required: [],
       },
     },
   },
@@ -2307,6 +2336,7 @@ export class ChatService {
     if (name === 'crear_colindantes') return this.toolCrearColindantes(args, res, proyectoId)
     if (name === 'crear_calzaduras') return this.toolCrearCalzaduras(args, res, proyectoId)
     if (name === 'crear_movimiento_tierras') return this.toolCrearMovimientoTierras(args, res, proyectoId)
+    if (name === 'registrar_estudio_suelos') return this.toolRegistrarEstudioSuelos(args, res, proyectoId)
     if (name === 'crear_vaciados') return this.toolCrearVaciados(args, res, proyectoId)
     if (name === 'actualizar_actividades') return this.toolActualizarActividades(args, res, proyectoId)
     if (name === 'crear_productividad') return this.toolCrearProductividad(args, res, proyectoId)
@@ -2897,6 +2927,38 @@ export class ChatService {
     }
   }
 
+  /** Plasma en la pestaña "Estudio de Suelos" (key `suelos`) los parámetros geotécnicos que la IA extrajo de un EMS. */
+  private async toolRegistrarEstudioSuelos(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const CAMPOS = ['laboratorio', 'fecha', 'tipoSuelo', 'capacidadPortante', 'nivelFreatico', 'profCimentacion', 'agresividad', 'anguloFriccion', 'cohesion', 'asentamiento', 'recomendaciones']
+    const limpio: Record<string, string> = {}
+    for (const k of CAMPOS) {
+      const v = args?.[k]
+      if (v != null && String(v).trim()) limpio[k] = String(v).trim().slice(0, k === 'recomendaciones' ? 800 : 120)
+    }
+    if (Object.keys(limpio).length === 0) {
+      return { error: 'No recibí ningún parámetro del EMS. Extrae del estudio de suelos al menos la capacidad portante, el nivel freático y el tipo de suelo, y vuelve a llamar la herramienta.' }
+    }
+    try {
+      const prev: any = (await this.fasesDetalle.obtener(proyectoId, 'suelos').catch(() => null))?.datos ?? {}
+      await this.fasesDetalle.guardar(proyectoId, 'suelos', { ...prev, ...limpio })
+      res.write(`event:suelos_actualizados\ndata:${JSON.stringify({})}\n\n`)
+      this.logger.log(`Estudio de suelos de ${proyectoId}: ${Object.keys(limpio).length} campos plasmados`)
+      const resumen = [
+        limpio.capacidadPortante && `capacidad ${limpio.capacidadPortante}`,
+        limpio.nivelFreatico && `freático ${limpio.nivelFreatico}`,
+        limpio.tipoSuelo && `suelo ${limpio.tipoSuelo}`,
+      ].filter(Boolean).join(', ')
+      return {
+        ok: true,
+        campos: Object.keys(limpio).length,
+        mensaje: `Plasmé el estudio de suelos en la pestaña "Estudio de Suelos" del módulo de Excavación (${resumen || 'parámetros geotécnicos'}). Confírmale al usuario en 1-2 líneas lo que registraste y dile que puede revisarlo/ajustarlo ahí. Si el EMS recomienda un sistema de sostenimiento (calzaduras / muros anclados), ofrécele armar las etapas.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error registrando estudio de suelos:', err?.message)
+      return { error: `Error guardando el estudio de suelos: ${err?.message}` }
+    }
+  }
+
   private async toolCrearVaciados(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
     const num = (v: any) => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
     const uid = () => Math.random().toString(36).slice(2, 10)
@@ -3261,7 +3323,19 @@ export class ChatService {
       })
       const logi: any = (await this.fasesDetalle.obtener(proyectoId, 'logistica').catch(() => null))?.datos ?? {}
       await this.fasesDetalle.guardar(proyectoId, 'logistica', { ...logi, desmonteMetaViajes: viajes, desmonteMetaM3: volSuelto })
+      // Reflejar el cálculo en la pestaña "Mov. de tierras" del módulo (sin pisar el avance que registró el jefe)
+      const mt: any = (await this.fasesDetalle.obtener(proyectoId, 'movimiento_tierras').catch(() => null))?.datos ?? {}
+      const yaHaySotanos = Array.isArray(mt.sotanos) && mt.sotanos.length > 0
+      await this.fasesDetalle.guardar(proyectoId, 'movimiento_tierras', {
+        ...mt,
+        esponjamiento: factor,
+        capacidadVolquete: m3viaje,
+        sotanos: yaHaySotanos ? mt.sotanos : (usaSectores
+          ? sectores.map((s, i) => ({ id: `sec${i + 1}`, nombre: s.nombre, volumenProyectado: s.volumen_m3, volumenExcavado: 0 }))
+          : [{ id: 'masiva', nombre: 'Excavación masiva', volumenProyectado: volBanco, volumenExcavado: 0 }]),
+      })
       res.write(`event:etapas_creadas\ndata:${JSON.stringify({ fase: 'excavacion' })}\n\n`)
+      res.write(`event:tierras_actualizadas\ndata:${JSON.stringify({})}\n\n`)
       this.logger.log(`Volumen excavación ${proyectoId}: masiva ${volMasiva}${usaSectores ? ` (${sectores.length} niveles)` : ''} + localizado ${volLocalizado} = banco ${volBanco} m³, suelto ${volSuelto} m³, ${viajes} viajes`)
 
       // Desglose textual
