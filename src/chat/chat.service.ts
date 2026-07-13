@@ -8,7 +8,7 @@ import { Sesion, EstadoSesion } from '../entities/sesion.entity'
 import { Mensaje } from '../entities/mensaje.entity'
 import { TareaFase } from '../entities/tarea-fase.entity'
 import { EquipoFase } from '../entities/equipo-fase.entity'
-import { LlmService, LlmMessage, LlmTool, ToolCall, LlmContentPart } from './llm.service'
+import { LlmService, LlmMessage, LlmTool, ToolCall, ToolCallResult, LlmContentPart } from './llm.service'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const pdfParse = require('pdf-parse')
 import { MotoresService } from '../motores/motores.service'
@@ -2409,7 +2409,23 @@ export class ChatService {
     const MAX_ITERATIONS = 8
 
     for (let i = 0; i < MAX_ITERATIONS; i++) {
-      const result = await this.llm.completWithTools(messages, C4_TOOLS)
+      // Llamada al LLM con reintento (un hipo de OpenAI no debe tumbar el turno).
+      let result: ToolCallResult
+      try {
+        result = await this.llm.completWithTools(messages, C4_TOOLS)
+      } catch (e: any) {
+        const detalle = e?.response?.data?.error?.message ?? e?.message ?? 'error desconocido'
+        this.logger.error(`Agentic loop: fallo LLM (iter ${i}): ${detalle}`)
+        try {
+          result = await this.llm.completWithTools(messages, C4_TOOLS)
+        } catch (e2: any) {
+          const d2 = e2?.response?.data?.error?.message ?? e2?.message ?? 'error desconocido'
+          this.logger.error(`Agentic loop: fallo LLM en reintento: ${d2}`)
+          const msg = 'Tuve un problema al procesar tu mensaje con el servicio de IA. Intenta de nuevo en unos segundos.'
+          await this.llm.streamText(msg, res)
+          return msg
+        }
+      }
 
       if (!result.tool_calls || result.tool_calls.length === 0) {
         res.write(`event:status\ndata:${JSON.stringify({ step: 'Redactando informe...', done: true })}\n\n`)
@@ -2425,7 +2441,15 @@ export class ChatService {
       })
 
       for (const tc of result.tool_calls) {
-        const toolResult = await this.executeTool(tc, res, proyectoId, phone)
+        // Si una tool lanza una excepción, se captura y se devuelve como error a la IA
+        // (que responde con gracia) en vez de tumbar todo el turno.
+        let toolResult: any
+        try {
+          toolResult = await this.executeTool(tc, res, proyectoId, phone)
+        } catch (e: any) {
+          this.logger.error(`Tool ${tc.function?.name} lanzó excepción: ${e?.message}`)
+          toolResult = { error: `No pude ejecutar ${tc.function?.name}: ${e?.message ?? 'error interno'}` }
+        }
         messages.push({
           role: 'tool',
           tool_call_id: tc.id,
