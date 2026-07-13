@@ -3509,10 +3509,26 @@ export class ChatService {
 
     const regionesU: { capa: string; area_u2: number }[] = []
     const niveles = new Set<string>()
+    const tipos: Record<string, number> = {}
+    const capaBbox: Record<string, { minx: number; miny: number; maxx: number; maxy: number }> = {}
+    let maxSpan = 0
+    const acumBbox = (capa: string, x: number, y: number) => {
+      const b = capaBbox[capa] ?? (capaBbox[capa] = { minx: 1e18, miny: 1e18, maxx: -1e18, maxy: -1e18 })
+      b.minx = Math.min(b.minx, x); b.miny = Math.min(b.miny, y); b.maxx = Math.max(b.maxx, x); b.maxy = Math.max(b.maxy, y)
+      maxSpan = Math.max(maxSpan, Math.abs(x), Math.abs(y))
+    }
+    const esCerrada = (e: any) => e.shape || e.closed ||
+      (e.vertices.length >= 3 &&
+        Math.abs((e.vertices[0].x ?? 0) - (e.vertices[e.vertices.length - 1].x ?? 0)) < 0.01 &&
+        Math.abs((e.vertices[0].y ?? 0) - (e.vertices[e.vertices.length - 1].y ?? 0)) < 0.01)
     for (const e of dxf.entities) {
-      if ((e.type === 'LWPOLYLINE' || e.type === 'POLYLINE') && Array.isArray(e.vertices) && e.vertices.length >= 3 && (e.shape || e.closed)) {
-        const areaU = shoelace(e.vertices)
-        if (areaU > 0) regionesU.push({ capa: String(e.layer || '0'), area_u2: areaU })
+      tipos[e.type] = (tipos[e.type] || 0) + 1
+      const capa = String(e.layer || '0')
+      if ((e.type === 'LWPOLYLINE' || e.type === 'POLYLINE') && Array.isArray(e.vertices) && e.vertices.length >= 3) {
+        for (const v of e.vertices) acumBbox(capa, v.x ?? 0, v.y ?? 0)
+        if (esCerrada(e)) { const a = shoelace(e.vertices); if (a > 0) regionesU.push({ capa, area_u2: a }) }
+      } else if (e.type === 'LINE' && Array.isArray(e.vertices)) {
+        for (const v of e.vertices) acumBbox(capa, v.x ?? 0, v.y ?? 0)
       } else if (e.type === 'TEXT' || e.type === 'MTEXT') {
         const txt = String(e.text ?? '')
         if (/N\.?P\.?T|N\.?F\.?Z/i.test(txt)) {
@@ -3521,13 +3537,21 @@ export class ChatService {
         }
       }
     }
-    if (!regionesU.length) return { error: 'No encontré regiones cerradas (polilíneas) en el DXF. ¿Exportaste la vista con la geometría del terreno/excavación?' }
 
-    // Unidades: si están sin definir y las áreas son enormes, casi seguro están en mm
+    // Unidades (heurística por magnitud si están sin definir)
     let unidades = UNAME[insunits] ?? 'sin definir'
-    const maxU = regionesU.reduce((m, r) => Math.max(m, r.area_u2), 0)
-    if ((insunits === 0 || FACT[insunits] === undefined) && maxU > 500000) { factLin = 0.001; unidades = 'milímetros (inferido por magnitud)' }
+    if ((insunits === 0 || FACT[insunits] === undefined) && maxSpan > 100000) { factLin = 0.001; unidades = 'milímetros (inferido por magnitud)' }
     const factArea = factLin * factLin
+
+    // Sin contorno cerrado (ej. DXF exportado de Revit = líneas sueltas): diagnóstico honesto + guía
+    if (!regionesU.length) {
+      const capas = Object.entries(capaBbox)
+        .map(([c, b]) => ({ capa: c, ancho_m: +((b.maxx - b.minx) * factLin).toFixed(1), alto_m: +((b.maxy - b.miny) * factLin).toFixed(1) }))
+        .filter((c) => c.ancho_m > 1 && c.alto_m > 1)
+        .sort((a, b) => b.ancho_m * b.alto_m - a.ancho_m * a.alto_m)
+        .slice(0, 8)
+      return { sin_regiones: true, unidades, entidades: tipos, capas_grandes: capas, niveles: [...niveles].sort() }
+    }
 
     const regiones = regionesU
       .map((r) => ({ capa: r.capa, area_m2: Math.round(r.area_u2 * factArea) }))
@@ -3556,6 +3580,16 @@ export class ChatService {
       const r = this.analizarDxfTexto(texto)
       if (r.error) return r
       const fmt = (n: number) => n.toLocaleString('es-PE')
+      // Sin contorno cerrado: el DXF es "line-soup" (típico de Revit). Diagnóstico honesto + guía.
+      if (r.sin_regiones) {
+        const tipos = Object.entries(r.entidades || {}).map(([t, n]) => `${n} ${t}`).join(', ')
+        const capas = (r.capas_grandes || []).map((c: any) => `${c.capa} (${c.ancho_m}×${c.alto_m} m)`).join('; ')
+        this.logger.log(`DXF ${doc.nombre} (${proyectoId}): SIN regiones cerradas — ${tipos}`)
+        return {
+          sin_regiones: true, archivo: doc.nombre, unidades: r.unidades, entidades: r.entidades, capas_grandes: r.capas_grandes, niveles: r.niveles,
+          mensaje: `Leí el CAD "${doc.nombre}" pero NO tiene ningún CONTORNO CERRADO (polilínea) que pueda medir — su geometría son líneas sueltas (${tipos}), típico de un DXF exportado de Revit/ACC. Explícale al usuario esto CON HONESTIDAD y dale la salida más rápida, en este orden: (1) que en su CAD (AutoCAD/ZWCAD) use el comando CONTORNO/BOUNDARY: hace clic DENTRO de la zona de excavación y el CAD crea una polilínea cerrada; luego re-exporta el DXF y yo la mido exacta. (2) O que use el comando AREA del CAD (marca el contorno del terreno) y me dé ese número directo. (3) O, si ya conoce el área del cuadro de áreas del plano de arquitectura, que me la dé y calculo el volumen igual. ${r.niveles?.length ? `Del CAD SÍ saqué los niveles N.P.T./N.F.Z.: ${r.niveles.join(', ')} m. ` : ''}${capas ? `Las capas con más geometría son: ${capas} (referencia, NO es el área exacta). ` : ''}NO inventes un área.`,
+        }
+      }
       const listaCand = r.candidatos_terreno.length
         ? r.candidatos_terreno.map((c: any) => `${c.capa}: ${fmt(c.area_m2)} m²`).join('; ')
         : ''
