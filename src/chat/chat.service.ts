@@ -208,6 +208,12 @@ MODO J — MOVIMIENTO DE TIERRAS (excavación)
 - Estima el volumen por sótano desde la cabida: área de planta libre × ~3.0 m de altura por sótano. Los viajes de volquete se calculan con esponjamiento (~1.25) y capacidad (~15 m³).
 - Si acepta, llama a crear_movimiento_tierras con los sótanos (nombre + volumenProyectado) y el botadero. El usuario registra luego el volumen excavado real y los viajes.
 
+MODO J2 — METRADO Y COSTO DE EXCAVACIÓN
+════════════════════════════════════════════
+- Cuando el usuario pida "arma/genera el metrado o el presupuesto de excavación" (o el costo/valorización), usa crear_metrado_excavacion. Convierte los datos en partidas con metrado y precio en S/.
+- Si ya calculaste el VOLUMEN, la herramienta arma sola la excavación masiva y la eliminación de desmonte. Tú puedes pasarle una lista más completa en "partidas" con lo que sepas metrar: calzaduras (m²), muros anclados (m²), trazo, perfilado. NO inventes metrados: usa los del volumen, las calzaduras y los planos.
+- Repórtale el desglose y el TOTAL, y aclárale que los precios son REFERENCIALES del mercado limeño (que los ajuste con su APU). Lo ve y edita en la pestaña "Metrado y costo".
+
 MODO K — CONTROL DE CONCRETO / VACIADOS (construcción)
 ════════════════════════════════════════════
 - El casco se controla por su concreto. Cuando el ingeniero hable de la construcción/estructura, puedes OFRECER armar el plan de vaciados.
@@ -1225,6 +1231,33 @@ const C4_TOOLS: LlmTool[] = [
           tipoCemento: { type: 'string', description: 'Tipo de cemento recomendado (ej. "Tipo I", "Tipo V", "Tipo MS").' },
           sistemaSostenimiento: { type: 'string', description: 'Sostenimiento temporal recomendado (ej. "Calzaduras", "Muros anclados", "Calzaduras + muros anclados").' },
           recomendaciones: { type: 'string', description: '1-3 frases clave para excavación/cimentación.' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'crear_metrado_excavacion',
+      description: 'Arma el METRADO Y PRESUPUESTO de excavación en el módulo (pestaña "Metrado y costo"): partidas con unidad, metrado (cantidad) y precio unitario en S/. Úsala cuando el usuario pida "arma/genera el metrado o presupuesto de excavación". Si NO le pasas "partidas", la herramienta las PRE-LLENA sola desde el volumen de excavación ya calculado (excavación masiva + eliminación de desmonte). Si tienes más metrados (calzaduras en m², muros anclados en m², trazo, perfilado), pásalos tú en "partidas" para un metrado más completo. Los precios son referenciales del mercado limeño y el usuario los ajusta; si no sabes un precio, deja 0 o usa un referencial.',
+      parameters: {
+        type: 'object',
+        properties: {
+          partidas: {
+            type: 'array',
+            description: 'Partidas del metrado. Dala cuando tengas los metrados (del volumen, calzaduras, muros anclados, planos). Si la omites, se arma sola desde el volumen calculado.',
+            items: {
+              type: 'object',
+              properties: {
+                descripcion: { type: 'string', description: 'Ej. "Excavación masiva a máquina", "Eliminación de material excedente c/ volquete", "Calzaduras", "Muros anclados".' },
+                unidad: { type: 'string', description: 'm3, m2, ml, und, glb, viaje...' },
+                metrado: { type: 'number', description: 'Cantidad (del volumen/calzaduras/planos). NO inventes: usa los datos calculados.' },
+                precioUnitario: { type: 'number', description: 'Precio unitario en S/ (referencial de mercado limeño). Si no lo sabes, deja 0.' },
+              },
+              required: ['descripcion', 'unidad'],
+            },
+          },
         },
         required: [],
       },
@@ -2437,6 +2470,7 @@ export class ChatService {
     if (name === 'crear_calzaduras') return this.toolCrearCalzaduras(args, res, proyectoId)
     if (name === 'crear_movimiento_tierras') return this.toolCrearMovimientoTierras(args, res, proyectoId)
     if (name === 'registrar_estudio_suelos') return this.toolRegistrarEstudioSuelos(args, res, proyectoId)
+    if (name === 'crear_metrado_excavacion') return this.toolCrearMetradoExcavacion(args, res, proyectoId)
     if (name === 'analizar_cad_dxf') return this.toolAnalizarCadDxf(args, res, proyectoId)
     if (name === 'crear_vaciados') return this.toolCrearVaciados(args, res, proyectoId)
     if (name === 'actualizar_actividades') return this.toolActualizarActividades(args, res, proyectoId)
@@ -3066,6 +3100,65 @@ export class ChatService {
     } catch (err: any) {
       this.logger.error('Error registrando estudio de suelos:', err?.message)
       return { error: `Error guardando el estudio de suelos: ${err?.message}` }
+    }
+  }
+
+  /** Precio unitario referencial (S/, mercado limeño) según el tipo de partida. */
+  private puReferencial(descripcion: string, unidad: string): number {
+    const d = descripcion.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    if (/elimina|desmonte|acarreo|excedente|volquete/.test(d)) return unidad === 'viaje' ? 130 : 28
+    if (/excavac.*(masiv|maquin)|masiv/.test(d)) return 15
+    if (/excavac/.test(d)) return 22
+    if (/calzadur/.test(d)) return 200
+    if (/muro.*anclad|anclaje/.test(d)) return 320
+    if (/entibad|arriostr/.test(d)) return 90
+    if (/perfilad|nivelac|refine/.test(d)) return 6
+    if (/trazo|replante/.test(d)) return unidad === 'glb' ? 1500 : 3
+    return 0
+  }
+
+  private async toolCrearMetradoExcavacion(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const num = (v: any) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0 }
+    const uid = () => Math.random().toString(36).slice(2, 10)
+    type P = { id: string; descripcion: string; unidad: string; metrado: number; precioUnitario: number }
+    let partidas: P[] = []
+
+    if (Array.isArray(args.partidas) && args.partidas.length) {
+      partidas = args.partidas
+        .filter((p: any) => p?.descripcion && String(p.descripcion).trim())
+        .slice(0, 40)
+        .map((p: any) => {
+          const descripcion = String(p.descripcion).trim().slice(0, 120)
+          const unidad = String(p.unidad ?? 'm3').trim().slice(0, 8)
+          const pu = num(p.precioUnitario)
+          return { id: uid(), descripcion, unidad, metrado: num(p.metrado), precioUnitario: pu || this.puReferencial(descripcion, unidad) }
+        })
+    } else {
+      // Auto-armado desde el volumen ya calculado
+      const vol: any = (await this.fasesDetalle.obtener(proyectoId, 'excavacion__volumen').catch(() => null))?.datos
+      const banco = num(vol?.vol_banco_m3) || num(vol?.vol_masiva_m3)
+      const suelto = num(vol?.vol_suelto_m3)
+      if (banco) partidas.push({ id: uid(), descripcion: 'Excavación masiva a máquina', unidad: 'm3', metrado: banco, precioUnitario: 15 })
+      if (suelto) partidas.push({ id: uid(), descripcion: 'Eliminación de material excedente c/ volquete', unidad: 'm3', metrado: suelto, precioUnitario: 28 })
+      if (!partidas.length) {
+        return { error: 'Todavía no hay volumen de excavación calculado ni partidas dadas. Calcula primero el volumen (calcular_volumen_excavacion) o pásame las partidas con su metrado.' }
+      }
+    }
+
+    try {
+      await this.fasesDetalle.guardar(proyectoId, 'excavacion__metrado', { partidas, moneda: 'PEN', _autogen: true, fecha: this.hoyISO() })
+      res.write(`event:metrado_actualizado\ndata:${JSON.stringify({})}\n\n`)
+      const total = partidas.reduce((s, p) => s + p.metrado * p.precioUnitario, 0)
+      const fmt = (n: number) => Math.round(n).toLocaleString('es-PE')
+      this.logger.log(`Metrado excavación ${proyectoId}: ${partidas.length} partidas, total S/ ${Math.round(total)}`)
+      const detalle = partidas.map((p) => `  • ${p.descripcion}: ${fmt(p.metrado)} ${p.unidad} × S/ ${fmt(p.precioUnitario)} = S/ ${fmt(p.metrado * p.precioUnitario)}`).join('\n')
+      return {
+        ok: true, partidas: partidas.length, total_soles: Math.round(total),
+        mensaje: `Armé el metrado de excavación en la pestaña "Metrado y costo" (${partidas.length} partidas, total ≈ S/ ${fmt(total)}):\n${detalle}\nRepórtaselo al usuario con el desglose y el TOTAL. Aclárale que los precios son REFERENCIALES del mercado limeño e incluyen mano de obra/equipo/materiales, y que los ajuste con su APU. Si faltan partidas que tú sí puedes metrar (calzaduras m², muros anclados m², trazo, perfilado), ofrécele agregarlas.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error creando metrado:', err?.message)
+      return { error: `Error armando el metrado: ${err?.message}` }
     }
   }
 
