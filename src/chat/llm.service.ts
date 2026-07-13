@@ -140,11 +140,13 @@ export class LlmService {
     messages: LlmMessage[],
     tools: LlmTool[],
   ): Promise<ToolCallResult> {
+    // Los modelos GPT-5 / o-series usan max_completion_tokens (y solo temperature=1);
+    // gpt-4o y anteriores aceptan max_tokens + cualquier temperature. Se detecta por el nombre.
+    const esNuevo = /^(gpt-5|o1|o3|o4)/i.test(this.openaiModel)
     const body: Record<string, any> = {
       model: this.openaiModel,
       messages,
-      temperature: 0.1,
-      max_tokens: 4096,
+      ...(esNuevo ? { max_completion_tokens: 4096 } : { temperature: 0.1, max_tokens: 4096 }),
     }
     if (tools.length > 0) {
       body.tools = tools
