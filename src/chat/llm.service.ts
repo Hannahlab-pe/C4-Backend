@@ -11,7 +11,7 @@ export type ToolCall = {
 
 export type LlmContentPart =
   | { type: 'text'; text: string }
-  | { type: 'image_url'; image_url: { url: string } }
+  | { type: 'image_url'; image_url: { url: string; detail?: 'low' | 'high' | 'auto' } }
 
 export type LlmMessage =
   | { role: 'system'; content: string }

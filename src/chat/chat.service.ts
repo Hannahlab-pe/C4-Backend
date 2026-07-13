@@ -1461,14 +1461,27 @@ const C4_TOOLS: LlmTool[] = [
     type: 'function',
     function: {
       name: 'calcular_volumen_excavacion',
-      description: 'Calcula el VOLUMEN DE EXCAVACIÓN de forma rigurosa: (1) EXCAVACIÓN MASIVA = área del terreno × profundidad general; (2) SOBRE-EXCAVACIÓN LOCALIZADA = zapatas/cimientos/cisterna que bajan más (de los detalles de cimentación); suma ambas = volumen en banco, y lo multiplica por el factor de esponjamiento (1.3 en Perú) para el volumen SUELTO a eliminar, más los viajes de volquete. Saca la PROFUNDIDAD GENERAL y las cotas de las zapatas de los documentos (EMS / detalles de cimentación: niveles como N.P.T. y N.F.Z.). Si te falta el área/dimensiones del terreno o la profundidad, la herramienta te dirá qué pedir: pídeselo, NO inventes. OJO: sin levantamiento topográfico esto es un ESTIMADO (asume terreno plano); la herramienta te recuerda pedir la topografía para el exacto.',
+      description: 'Calcula el VOLUMEN DE EXCAVACIÓN de forma rigurosa. La EXCAVACIÓN MASIVA se calcula de DOS formas según el terreno: (A) ESCALONADO / VARIOS NIVELES → usa el parámetro "sectores" (lista donde cada sector tiene su ÁREA y su PROFUNDIDAD), cuando el plano de cimentación muestra distintos N.P.T. y el fondo NO es plano; el volumen masivo es la SUMA de área×profundidad de cada sector. (B) BLOQUE SIMPLE → usa "area_m2" × "profundidad_m" cuando el fondo es parejo. A eso SIEMPRE se le suma (2) la SOBRE-EXCAVACIÓN LOCALIZADA de zapatas/cimientos/cisterna que bajan más que el fondo (parámetro "zapatas" o "volumen_localizado_m3", de las cotas N.F.Z./H de los detalles de cimentación). Total = volumen en BANCO × factor de esponjamiento (1.3 en Perú) = volumen SUELTO a eliminar + viajes de volquete. SACA tú mismo los niveles, cotas y áreas de los documentos: en un plano de CIMENTACIÓN combina el TEXTO extraído del PDF (los N.P.T., N.F.Z., H) con lo que VES en la imagen del plano (qué sector es cada nivel). El área del terreno está en el cuadro de áreas del plano de arquitectura/ubicación. Si de verdad falta un dato en TODOS los documentos, la herramienta te dice qué pedir: pídelo, NO inventes. HONESTO: sin un cuadro de metrados, el DWG/CAD o el levantamiento topográfico, las áreas por nivel son ESTIMADAS del dibujo (el terreno es irregular); la herramienta te recuerda ofrecer el cálculo exacto.',
       parameters: {
         type: 'object',
         properties: {
-          area_m2: { type: 'number', description: 'Área del terreno en m² (opcional si das largo y ancho).' },
+          sectores: {
+            type: 'array',
+            description: 'MODO ESCALONADO (fondo NO plano, varios N.P.T.). Una entrada por cada nivel/zona de la plataforma. El volumen masivo será la SUMA de área×profundidad de todos los sectores. Úsalo cuando el plano de cimentación muestra distintos niveles. Si el fondo es parejo, NO uses esto: usa area_m2 + profundidad_m.',
+            items: {
+              type: 'object',
+              properties: {
+                nombre: { type: 'string', description: 'Zona/sector (ej. "Plataforma general", "Cisterna", "Rampa vehicular", "Sótano bajo ejes C-D").' },
+                nivel: { type: 'string', description: 'Cota N.P.T. de ese sector, para citarla (ej. "-21.40 m").' },
+                area_m2: { type: 'number', description: 'Área de ese sector en m².' },
+                profundidad_m: { type: 'number', description: 'Profundidad de excavación de ese sector en m (de la superficie del terreno a SU fondo). NO incluyas aquí lo que bajan las zapatas.' },
+              },
+            },
+          },
+          area_m2: { type: 'number', description: 'MODO SIMPLE: área del terreno en m² (opcional si das largo y ancho, o si usas "sectores").' },
           largo_m: { type: 'number', description: 'Largo del terreno en m (si no tienes el área).' },
           ancho_m: { type: 'number', description: 'Ancho del terreno en m (si no tienes el área).' },
-          profundidad_m: { type: 'number', description: 'Profundidad de la EXCAVACIÓN MASIVA general en m (hasta el fondo general, ej. N.P.T. -21.40 → 21). MUY IMPORTANTE: NO sumes aquí lo que las zapatas bajan de más (eso se aplicaría a TODO el terreno y sobreestima) — la profundidad extra de las zapatas va SOLO en el parámetro "zapatas".' },
+          profundidad_m: { type: 'number', description: 'MODO SIMPLE: profundidad de la EXCAVACIÓN MASIVA general en m (hasta el fondo general, ej. N.P.T. -21.40 → 21). MUY IMPORTANTE: NO sumes aquí lo que las zapatas bajan de más (eso se aplicaría a TODO el terreno y sobreestima) — la profundidad extra de las zapatas va SOLO en el parámetro "zapatas". Si el fondo tiene varios niveles, usa "sectores" en vez de esto.' },
           zapatas: {
             type: 'array',
             description: 'Zapatas/cimientos que bajan MÁS que el fondo general (sobre-excavación localizada). Cada una: cantidad × largo × ancho × profundidad_extra (lo que baja debajo del fondo general). De los detalles de cimentación.',
@@ -2012,7 +2025,9 @@ export class ChatService {
       `- CALIDAD: para el plan de calidad usa consultar_calidad (ver protocolos y no conformidades), crear_calidad (armar los protocolos de liberación de una fase), liberar_protocolo (marcar un protocolo como liberado u observado) y registrar_no_conformidad (defectos de calidad — ej. desde una FOTO: "veo una cangrejera en la columna, ¿registro una no conformidad?"). Mismo criterio que seguridad: si una tool devuelve "ambiguo", "candidatos" o "necesita_fase", pregúntale al usuario a cuál se refiere antes de actuar.\n` +
       `- LOGÍSTICA (recepción de materiales y control de camiones): aunque te lo digan como simple AVISO ("salió un volquete", "llegó el cemento", "entró el mixer"), LLAMA la tool de inmediato — nunca digas "registré" sin haberla llamado. Material que llegó → registrar_recepcion_material (ej. "llegaron 200 bolsas de cemento"). Camión entrando/saliendo (volquete de desmonte, mixer, entrega) → registrar_camion con tipo ingreso/salida, placa y motivo. La foto que mandaron se adjunta sola como evidencia. Para ver la bitácora → consultar_logistica ("¿qué llegó hoy?", "¿cuántos volquetes salieron?").\n` +
       `- PROYECTOS: el jefe puede tener varios proyectos. Para ver la lista usa listar_proyectos; para cambiar, seleccionar_proyecto. Si dice "lista mis proyectos", "trabaja en el proyecto X", "cambia a Y", úsalas. El proyecto elegido queda activo para todo lo que sigue.\n` +
-      `- VOLUMEN DE EXCAVACIÓN (riguroso): si preguntan cuánto excavar / cuántos volquetes, usa calcular_volumen_excavacion. Sepáralo en (1) EXCAVACIÓN MASIVA = área × profundidad general (fondo N.P.T.), y (2) SOBRE-EXCAVACIÓN de zapatas/cimientos que bajan más (de los detalles de cimentación: cotas como N.F.Z.; pásalas en "zapatas" o en "volumen_localizado_m3"). NUNCA sumes la profundidad extra de las zapatas a la profundidad general (aplicaría a TODA el área y sobreestima): la profundidad general es solo hasta el fondo masivo, y lo que baja más va en "zapatas". Saca las profundidades/cotas de los documentos; si falta el área/dimensiones del terreno o la profundidad, PÍDESELO (no inventes). Reporta con DESGLOSE (masiva + localizada), factor 1.3, y sé HONESTO: es un estimado que asume terreno plano; para el EXACTO se necesita el levantamiento topográfico (secciones/cuadrícula, porque el terreno es irregular) — ofrécele calcularlo si te pasa la topografía. Cita de qué archivo salió cada dato. REGLA DE ORO: EXTRAE tú mismo del/los documento(s) que te dieron el área, dimensiones, zapatas y profundidad — NO le pidas al usuario un dato que ya está en un plano que te mandó (esa es tu chamba, no la suya). Si un dato NO está en ningún documento (ej. el área de un lote irregular no viene en el plano de anclajes), dile EN QUÉ plano suele estar (el área en el cuadro de áreas del plano de arquitectura/lotización; las zapatas en el cuadro de cimentación) y pídele ese plano o el dato.\n` +
+      `- VOLUMEN DE EXCAVACIÓN (riguroso): si preguntan cuánto excavar / cuántos volquetes, usa calcular_volumen_excavacion. La EXCAVACIÓN MASIVA tiene dos modos: (A) TERRENO ESCALONADO — si el plano de cimentación muestra VARIOS niveles distintos de N.P.T. (el fondo NO es plano), arma el parámetro "sectores": una fila por nivel con su ÁREA y su PROFUNDIDAD (la tool suma área×profundidad de cada uno). (B) BLOQUE SIMPLE — si el fondo es parejo, un solo "area_m2" × "profundidad_m". A eso SIEMPRE súmale (2) la SOBRE-EXCAVACIÓN de zapatas/cimientos que bajan MÁS que el fondo (cotas N.F.Z./H de los detalles de cimentación; en "zapatas" o "volumen_localizado_m3"). NUNCA sumes la profundidad extra de las zapatas a la profundidad general/sector (aplicaría a TODA el área y sobreestima): eso va SOLO en "zapatas".\n` +
+      `- LEER UN PLANO DE CIMENTACIÓN (crítico para el volumen): cuando te manden el plano de cimentación/estructuras, COMBINA las dos fuentes — el TEXTO extraído del PDF (ahí vienen todos los N.P.T., N.F.Z. y las alturas H de zapatas) con lo que VES en la IMAGEN del plano (qué sector es cada nivel, dónde están las zapatas). Con eso arma tú mismo la tabla de niveles y las zapatas, y calcula. Saca la PROFUNDIDAD de cada sector restando: profundidad = nivel de la superficie del terreno − cota del fondo (N.P.T.) de ese sector.\n` +
+      `- Reporta el volumen con DESGLOSE (la tabla de niveles + la localizada de zapatas), factor 1.3, y sé HONESTO: las ÁREAS de cada nivel son ESTIMADAS del dibujo salvo que tengas el cuadro de metrados o el DWG/CAD; para el EXACTO en terreno irregular se necesita el levantamiento topográfico (secciones/cuadrícula) o el metrado del expediente — ofrécelo. Cita de qué archivo salió cada dato. REGLA DE ORO: EXTRAE tú mismo del/los documento(s) el área, los niveles, las zapatas y las profundidades — NO le pidas al usuario un dato que ya está en un plano que te mandó (esa es tu chamba, no la suya). Si un dato NO está en NINGÚN documento (ej. el área exacta de cada sector no se puede medir del PDF), dile con honestidad qué falta y EN QUÉ documento suele estar (el área del terreno en el cuadro de áreas del plano de arquitectura/ubicación; las áreas exactas por nivel en el DWG/CAD o el cuadro de metrados de movimiento de tierras) y pídeselo.\n` +
       `- Si el resultado es largo (un análisis), resume lo clave (TIR, N° de deptos, etc.) en pocas líneas.`
     const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + estadoProyecto + notaWhatsapp + seleccionContext
 
@@ -2082,8 +2097,9 @@ export class ChatService {
     const promptPlano =
       `El usuario te envió un PDF de pocas páginas ("${media?.pdfName || 'documento'}"). Te lo paso como IMAGEN (LO VES) y también el texto extraído (rótulo, cotas, notas). Eres el ingeniero. IMPORTANTE: responde en TEXTO PLANO, breve — NADA de markdown (ni ##, ni **, ni listas con "-"); como mucho viñetas con "•".\n` +
       `- Si es un PLANO / dibujo técnico: identifícalo por el rótulo (proyecto, especialidad, código) y describe lo que VES en el dibujo (distribución, ejes, luces entre ejes, elementos, niveles, sección). Extrae datos útiles.\n` +
+      `- Si es un PLANO DE CIMENTACIÓN / ESTRUCTURAS con niveles: junta lo que VES en la imagen (qué sector es cada nivel, dónde van las zapatas) con el TEXTO extraído (todos los N.P.T., N.F.Z. y alturas H de zapatas). Con eso puedes armar el VOLUMEN DE EXCAVACIÓN por niveles (calcular_volumen_excavacion, parámetro "sectores") + la sobre-excavación de zapatas. Si te falta el área de cada sector, dilo con honestidad (se estima del dibujo o sale del DWG/metrado) y ofrece calcularlo.\n` +
       `- Si es un DOCUMENTO de texto (certificado, carta, acta): resúmelo.\n` +
-      `Luego relaciónalo con este proyecto y ofrécele 1-3 acciones concretas (crear actividades de esa especialidad, revisar seguridad/calidad, etc.) y pregunta. No inventes datos que no veas.\n` +
+      `Luego relaciónalo con este proyecto y ofrécele 1-3 acciones concretas (crear actividades de esa especialidad, revisar seguridad/calidad, calcular el volumen de excavación, etc.) y pregunta. No inventes datos que no veas.\n` +
       (texto ? `\nMensaje del usuario: "${texto}"\n` : '') +
       (pdfTexto ? `\n===== TEXTO EXTRAÍDO (rótulo/cotas) =====\n${pdfTexto.slice(0, 6000)}` : '')
 
@@ -2096,7 +2112,7 @@ export class ChatService {
     } else if (planoImg) {
       userContent = [
         { type: 'text', text: promptPlano },
-        { type: 'image_url', image_url: { url: planoImg } },
+        { type: 'image_url', image_url: { url: planoImg, detail: 'high' } },
       ]
     } else if (excelTexto) {
       userContent = promptExcel
@@ -2186,11 +2202,11 @@ export class ChatService {
         const parsed = await this.parsePdfFull(buffer)
         const texto = parsed.text.slice(0, 8000)
         const planoImg = parsed.numpages <= 5 ? await this.renderPdfPrimeraPagina(buffer) : null
-        const txt = `${dto.mensaje || 'Te paso un documento.'}\n\n---\nDocumento adjunto: ${dto.archivoNombre ?? 'documento.pdf'}.${planoImg ? ' Te lo paso TAMBIÉN como imagen: si es un plano, describe lo que VES en el dibujo (ejes, luces, elementos).' : ''}\nTexto extraído:\n${texto}`
+        const txt = `${dto.mensaje || 'Te paso un documento.'}\n\n---\nDocumento adjunto: ${dto.archivoNombre ?? 'documento.pdf'}.${planoImg ? ' Te lo paso TAMBIÉN como imagen: si es un plano, describe lo que VES en el dibujo (ejes, luces, elementos). Si es un plano de CIMENTACIÓN con niveles, junta la imagen (qué sector es cada nivel) con el texto (N.P.T./N.F.Z./H) para armar el VOLUMEN de excavación por niveles (calcular_volumen_excavacion, parámetro "sectores") + la sobre-excavación de zapatas; si te falta el área de un sector, dilo con honestidad.' : ''}\nTexto extraído:\n${texto}`
         if (planoImg) {
           return [
             { type: 'text', text: txt },
-            { type: 'image_url', image_url: { url: planoImg } },
+            { type: 'image_url', image_url: { url: planoImg, detail: 'high' } },
           ]
         }
         return txt
@@ -3149,26 +3165,50 @@ export class ChatService {
   /** Calcula el volumen de excavación (área × prof × esponjamiento 1.3) + viajes de volquete. Pide datos si faltan. */
   private async toolCalcularVolumenExcavacion(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
     const num = (v: any) => (v != null && !isNaN(Number(v)) && Number(v) > 0 ? Number(v) : undefined)
-    const largo = num(args.largo_m), ancho = num(args.ancho_m)
-    const area = num(args.area_m2) ?? (largo && ancho ? largo * ancho : undefined)
-    const prof = num(args.profundidad_m)
+    const fmt = (n: number) => Math.round(n).toLocaleString('es-PE')
 
-    const falta: string[] = []
-    if (!area) falta.push('el ÁREA del terreno en m² (está en el CUADRO DE ÁREAS del plano de arquitectura o el plano de lotización/topografía)')
-    if (!prof) falta.push('la PROFUNDIDAD de excavación en metros (está en el EMS o en los detalles de cimentación: cotas N.P.T./N.F.Z.)')
-    if (falta.length) {
-      return {
-        necesita_datos: falta,
-        mensaje: `Antes de pedirlo, REVISA si el dato ya está en algún documento que te dieron y sácalo de ahí (cita el plano). Si de verdad no está en ningún documento, pídeselo al usuario diciéndole EN QUÉ plano suele estar: me falta ${falta.join(' y ')}. Sugiérele que te mande ese plano o te dé el dato. NO inventes números.`,
+    // ── (1) EXCAVACIÓN MASIVA ──
+    // Modo A (escalonado): varios sectores, cada uno con su área y su profundidad → suma.
+    // Modo B (simple): un solo bloque área × profundidad.
+    const sectores = (Array.isArray(args.sectores) ? args.sectores : [])
+      .map((s: any) => {
+        const a = num(s?.area_m2), p = num(s?.profundidad_m)
+        if (!a || !p) return null
+        return {
+          nombre: String(s?.nombre ?? 'Sector').slice(0, 60),
+          nivel: s?.nivel != null ? String(s.nivel).slice(0, 20) : undefined,
+          area_m2: a, profundidad_m: p, volumen_m3: Math.round(a * p),
+        }
+      })
+      .filter(Boolean) as { nombre: string; nivel?: string; area_m2: number; profundidad_m: number; volumen_m3: number }[]
+    const usaSectores = sectores.length > 0
+
+    const largo = num(args.largo_m), ancho = num(args.ancho_m)
+    const areaSimple = num(args.area_m2) ?? (largo && ancho ? largo * ancho : undefined)
+    const profSimple = num(args.profundidad_m)
+
+    // Validación: o hay sectores válidos, o hay área + profundidad del bloque simple.
+    if (!usaSectores) {
+      const falta: string[] = []
+      if (!areaSimple) falta.push('el ÁREA del terreno en m² (está en el CUADRO DE ÁREAS del plano de arquitectura/ubicación o el plano de lotización/topografía)')
+      if (!profSimple) falta.push('la PROFUNDIDAD de excavación en metros (está en el EMS o en los detalles de cimentación: cotas N.P.T./N.F.Z.)')
+      if (falta.length) {
+        return {
+          necesita_datos: falta,
+          mensaje: `Antes de pedirlo, REVISA si el dato ya está en algún documento que te dieron y sácalo de ahí (cita el plano). Si el terreno tiene VARIOS NIVELES (distintos N.P.T. en el plano de cimentación), arma el parámetro "sectores" con el área y la profundidad de cada nivel en vez de un solo bloque. Si de verdad no está en ningún documento, pídeselo al usuario diciéndole EN QUÉ plano suele estar: me falta ${falta.join(' y ')}. NO inventes números.`,
+        }
       }
     }
 
     const factor = num(args.factor_esponjamiento) ?? 1.3
     const m3viaje = num(args.m3_por_viaje) ?? 6
 
-    // (1) Excavación masiva = área × profundidad general
-    const volMasiva = Math.round(area! * prof!)
-    // (2) Sobre-excavación localizada (zapatas/cimientos que bajan más que el fondo general)
+    // (1) Volumen masiva
+    const volMasiva = usaSectores
+      ? sectores.reduce((acc, s) => acc + s.volumen_m3, 0)
+      : Math.round(areaSimple! * profSimple!)
+
+    // (2) Sobre-excavación localizada (zapatas/cimientos que bajan más que el fondo)
     let volLocalizado = num(args.volumen_localizado_m3) ?? 0
     if (!volLocalizado && Array.isArray(args.zapatas)) {
       for (const z of args.zapatas) {
@@ -3181,10 +3221,12 @@ export class ChatService {
     const volBanco = volMasiva + volLocalizado
     const volSuelto = Math.round(volBanco * factor)
     const viajes = Math.ceil(volSuelto / m3viaje)
+    const areaTotal = usaSectores ? sectores.reduce((a, s) => a + s.area_m2, 0) : areaSimple!
     try {
       const prev: any = (await this.fasesDetalle.obtener(proyectoId, 'excavacion__volumen').catch(() => null))?.datos ?? {}
       await this.fasesDetalle.guardar(proyectoId, 'excavacion__volumen', {
-        ...prev, area_m2: area, profundidad_m: prof, factor_esponjamiento: factor,
+        ...prev, area_m2: Math.round(areaTotal), profundidad_m: usaSectores ? undefined : profSimple,
+        sectores: usaSectores ? sectores : undefined, factor_esponjamiento: factor,
         vol_masiva_m3: volMasiva, vol_localizado_m3: volLocalizado,
         vol_banco_m3: volBanco, vol_suelto_m3: volSuelto, viajes_volquete: viajes, m3_por_viaje: m3viaje,
         fuentes: args.fuentes ? String(args.fuentes).slice(0, 300) : undefined, fecha: this.hoyISO(),
@@ -3192,16 +3234,29 @@ export class ChatService {
       const logi: any = (await this.fasesDetalle.obtener(proyectoId, 'logistica').catch(() => null))?.datos ?? {}
       await this.fasesDetalle.guardar(proyectoId, 'logistica', { ...logi, desmonteMetaViajes: viajes, desmonteMetaM3: volSuelto })
       res.write(`event:etapas_creadas\ndata:${JSON.stringify({ fase: 'excavacion' })}\n\n`)
-      this.logger.log(`Volumen excavación ${proyectoId}: masiva ${volMasiva} + localizado ${volLocalizado} = banco ${volBanco} m³, suelto ${volSuelto} m³, ${viajes} viajes`)
-      const fmt = (n: number) => n.toLocaleString('es-PE')
-      const desglose = volLocalizado > 0
-        ? `Excavación masiva: ${fmt(area!)} m² × ${prof} m = ${fmt(volMasiva)} m³. Sobre-excavación localizada (zapatas): ${fmt(volLocalizado)} m³. Total en banco: ${fmt(volBanco)} m³.`
-        : `Excavación masiva: ${fmt(area!)} m² × ${prof} m = ${fmt(volMasiva)} m³ en banco (aún sin sumar la sobre-excavación de zapatas).`
+      this.logger.log(`Volumen excavación ${proyectoId}: masiva ${volMasiva}${usaSectores ? ` (${sectores.length} niveles)` : ''} + localizado ${volLocalizado} = banco ${volBanco} m³, suelto ${volSuelto} m³, ${viajes} viajes`)
+
+      // Desglose textual
+      let desglose: string
+      if (usaSectores) {
+        const filas = sectores
+          .map((s) => `  • ${s.nombre}${s.nivel ? ` (N.P.T. ${s.nivel})` : ''}: ${fmt(s.area_m2)} m² × ${s.profundidad_m} m = ${fmt(s.volumen_m3)} m³`)
+          .join('\n')
+        desglose = `Excavación masiva POR NIVELES (fondo escalonado):\n${filas}\n  Subtotal masiva: ${fmt(volMasiva)} m³.`
+      } else {
+        desglose = `Excavación masiva: ${fmt(areaSimple!)} m² × ${profSimple} m = ${fmt(volMasiva)} m³.`
+      }
+      desglose += volLocalizado > 0
+        ? ` Sobre-excavación localizada (zapatas): ${fmt(volLocalizado)} m³. Total en banco: ${fmt(volBanco)} m³.`
+        : ` En banco: ${fmt(volBanco)} m³ (aún sin sumar la sobre-excavación de zapatas).`
+
       return {
-        ok: true, area_m2: area, profundidad_m: prof, factor_esponjamiento: factor,
+        ok: true, modo: usaSectores ? 'por_niveles' : 'bloque_simple',
+        area_total_m2: Math.round(areaTotal), factor_esponjamiento: factor,
+        sectores: usaSectores ? sectores : undefined,
         volumen_masiva_m3: volMasiva, volumen_localizado_m3: volLocalizado,
         volumen_banco_m3: volBanco, volumen_suelto_m3: volSuelto, viajes_volquete: viajes,
-        mensaje: `${desglose} × ${factor} (esponjamiento en Perú) = ${fmt(volSuelto)} m³ SUELTOS a eliminar ≈ ${viajes} viajes de volquete de ${m3viaje} m³. Repórtalo al usuario CON EL DESGLOSE (masiva + localizada), citando de qué archivo salió cada dato (${args.fuentes || 'los documentos y lo que indicó'}). ${volLocalizado > 0 ? '' : 'Menciona que aún falta sumar la sobre-excavación de las zapatas (de los detalles de cimentación).'} IMPORTANTE, sé honesto: este es un ESTIMADO por volumen de prisma que asume terreno plano; el volumen EXACTO requiere el LEVANTAMIENTO TOPOGRÁFICO (método de secciones o cuadrícula, porque el terreno es irregular) — ofrécele calcularlo exacto si te pasa la topografía.`,
+        mensaje: `${desglose} × ${factor} (esponjamiento en Perú) = ${fmt(volSuelto)} m³ SUELTOS a eliminar ≈ ${viajes} viajes de volquete de ${m3viaje} m³. Repórtalo al usuario CON EL DESGLOSE${usaSectores ? ' por niveles (la tabla de sectores)' : ' (masiva + localizada)'}, citando de qué archivo salió cada dato (${args.fuentes || 'los documentos y lo que indicó'}). ${volLocalizado > 0 ? '' : 'Menciona que aún falta sumar la sobre-excavación de las zapatas (de los detalles de cimentación).'} IMPORTANTE, sé HONESTO: ${usaSectores ? 'las ÁREAS de cada nivel son ESTIMADAS del dibujo salvo que tengas un cuadro de metrados o el DWG/CAD' : 'es un estimado por volumen de prisma que asume terreno plano'}; el volumen EXACTO en terreno irregular requiere el LEVANTAMIENTO TOPOGRÁFICO (método de secciones/cuadrícula) o el metrado del expediente — ofrécele calcularlo exacto si te pasa esa data.`,
       }
     } catch (err: any) {
       this.logger.error('Error calculando volumen:', err?.message)
