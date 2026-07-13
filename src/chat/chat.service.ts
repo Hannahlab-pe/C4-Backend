@@ -219,7 +219,7 @@ MODO J3 — CRONOGRAMA DE OBRA (Gantt profesional, por rendimientos)
 - Un cronograma serio NO inventa duraciones. La regla de oro: DURACIÓN (días útiles) = METRADO ÷ (RENDIMIENTO diario de la cuadrilla × N° de frentes en paralelo). Luego se pasa a días calendario según la jornada (días/semana).
 - Cuando el usuario pida "arma/genera el cronograma", NO lo generes de una, pero TAMPOCO lo interrogues en 5 turnos. Haz TODAS las preguntas que falten en UN SOLO mensaje corto: (1) fecha de inicio, (2) jornada (días/semana, default 6), (3) N° de FRENTES/cuadrillas en paralelo, (4) la METODOLOGÍA/SECUENCIA que cambia el plazo (ver abajo, CRÍTICO), y (5) solo si no hay metrado cargado, los datos mínimos de metrado (profundidad/N° de sótanos, área). Un solo mensaje, luego avanza.
 - PIENSA COMO CONSTRUCTOR EXPERTO — pregunta la METODOLOGÍA, no asumas la más optimista: la duración real depende de CÓMO se ejecuta, no solo del metrado. Antes de generar, identifica y pregunta la secuencia constructiva que impacta el plazo. Casos clave:
-  • EXCAVACIÓN entre medianeras: ¿es MASIVA a cielo abierto, o con SOSTENIMIENTO ANILLO POR ANILLO (calzaduras / muros anclados)? Esto cambia TODO. Anillo por anillo = por cada anillo (≈2.5 m de profundidad → N° anillos = profundidad ÷ 2.5): CALZAR ese anillo → EXCAVAR ese anillo → recién el siguiente, EN SECUENCIA (no en paralelo). Reduce el paralelismo (a menudo 1 frente efectivo por anillo) y ALARGA el plazo. Ej.: 9 m ≈ 4 anillos; NO trates 7,200 m³ como un bloque de 9 días si es anillo por anillo — modela el ciclo por anillo y el total sube (puede ser ~2.5x). PREGUNTA "¿excavación masiva o anillo por anillo con calzaduras?" y el N° de anillos antes de generar.
+  • EXCAVACIÓN entre medianeras: ¿es MASIVA a cielo abierto, o con SOSTENIMIENTO ANILLO POR ANILLO (calzaduras / muros anclados)? Esto cambia TODO. Anillo por anillo = por cada anillo (≈2.5 m de profundidad → N° anillos = profundidad ÷ 2.5): CALZAR ese anillo → EXCAVAR ese anillo → recién el siguiente, EN SECUENCIA (no en paralelo). Reduce el paralelismo (a menudo 1 frente efectivo por anillo) y ALARGA el plazo. Ej.: 9 m ≈ 4 anillos; NO trates 7,200 m³ como un bloque de 9 días si es anillo por anillo — modela el ciclo por anillo y el total sube (puede ser ~2.5x). PREGUNTA "¿excavación masiva o anillo por anillo con calzaduras?" y el N° de anillos antes de generar. CLAVE al generar: crea una actividad por anillo (Calzadura Anillo 1..N, Excavación Anillo 1..N) y pásale a cada una su "orden" (1,2,3,4...) para que la herramienta las programe EN SECUENCIA, no en paralelo. Sin "orden" saldrían todas el mismo día (mal).
   • CONSTRUCCIÓN: casco por PISOS (ciclo de piso, secuencial hacia arriba), no todos los pisos en paralelo.
   • En general: si una etapa es SECUENCIAL (una actividad no puede empezar hasta que termine la anterior), NO la modeles en paralelo — pásale a la herramienta la duración TOTAL ya sumada de la secuencia, o crea las actividades con esa lógica.
 - REGLA CRÍTICA — NO RE-PREGUNTES: usa TODO lo que el usuario YA dijo en esta conversación. Si ya te dio el área (ej. "terreno 800 m²"), es 800 m² — NO la vuelvas a pedir. Si ya dio profundidad/sótanos, jornada, frentes o esponjamiento, ÚSALOS. Repetir una pregunta que ya te contestó es un error grave que frustra al usuario. Si ya tienes lo mínimo (fecha + jornada + frentes + un metrado o forma de estimarlo), CALCULA y GENERA sin más vueltas.
@@ -1305,6 +1305,7 @@ const C4_TOOLS: LlmTool[] = [
                 frentes: { type: 'number', description: 'Cuadrillas en paralelo para ESTA actividad (si difiere del global).' },
                 duracion_dias: { type: 'number', description: 'Alternativa: duración en días calendario ya calculada, si no das metrado/rendimiento.' },
                 precio_unitario: { type: 'number', description: 'Precio unitario en S/ de la partida (del metrado/APU o referencial de mercado limeño). Con metrado × PU se calcula el COSTO de la actividad para el control de presupuesto. Si no lo sabes, deja 0.' },
+                orden: { type: 'number', description: 'SECUENCIA dentro de su etapa (1,2,3...). Úsalo para trabajo SECUENCIAL que NO va en paralelo, como los ANILLOS (Anillo 1, 2, 3, 4): con orden se programan uno tras otro (el 2 empieza cuando termina el 1). Las actividades SIN orden van en paralelo (mismo inicio). Clave para el anillo por anillo.' },
               },
               required: ['nombre', 'fase'],
             },
@@ -3271,8 +3272,8 @@ export class ChatService {
     const diasAct = num(args.dias_por_actividad) || 4
     const utilACalendario = (util: number) => Math.max(1, Math.ceil(util * 7 / diasSem))
 
-    // Overrides fundamentados por actividad (metrado ÷ rendimiento + costo metrado×PU) que pasó la IA
-    type Ov = { duracion: number; fundamento?: any; costo?: number; precioUnitario?: number }
+    // Overrides fundamentados por actividad (metrado ÷ rendimiento + costo metrado×PU + orden secuencial) que pasó la IA
+    type Ov = { duracion: number; fundamento?: any; costo?: number; precioUnitario?: number; orden?: number }
     const overrides: { fase: string; nombreNorm: string; ov: Ov }[] = []
     for (const a of (Array.isArray(args.actividades) ? args.actividades : [])) {
       if (!a?.nombre || !a?.fase) continue
@@ -3287,7 +3288,8 @@ export class ChatService {
       }
       const pu = num(a.precio_unitario)
       const costo = metrado && pu ? Math.round(metrado * pu) : 0
-      overrides.push({ fase: String(a.fase).toLowerCase(), nombreNorm: norm(a.nombre), ov: { duracion, fundamento, costo, precioUnitario: pu || undefined } })
+      const orden = a.orden != null && Number.isFinite(Number(a.orden)) ? Number(a.orden) : undefined
+      overrides.push({ fase: String(a.fase).toLowerCase(), nombreNorm: norm(a.nombre), ov: { duracion, fundamento, costo, precioUnitario: pu || undefined, orden } })
     }
     const buscarOv = (fase: string, nombre: string): Ov | null => {
       const n = norm(nombre)
@@ -3318,18 +3320,33 @@ export class ChatService {
           const propios = grupos[k] ?? []
           if (!propios.length) continue
           const etapaStart = new Date(cursor)
-          let maxDur = 0
-          for (const r of propios) {
-            const ov = buscarOv(fase, r.nombre)
-            const dur = ov ? ov.duracion : (num(r?.datos?.duracionDias) || diasAct)
-            maxDur = Math.max(maxDur, dur)
-            const datos: any = { ...(r?.datos ?? {}), fechaInicio: this.fechaISO(etapaStart), duracionDias: dur }
+          // Guardar una actividad con su inicio propio (para poder secuenciar los anillos)
+          const guardar = async (r: any, inicioAct: Date, ov: Ov | null, dur: number) => {
+            const datos: any = { ...(r?.datos ?? {}), fechaInicio: this.fechaISO(inicioAct), duracionDias: dur }
             if (ov?.fundamento) { datos.fundamentoDuracion = ov.fundamento; conFundamento++ }
             if (ov?.costo) { datos.costoPresupuestado = ov.costo; if (ov.precioUnitario) datos.precioUnitario = ov.precioUnitario; presupuestoTotal += ov.costo; conCosto++ }
             await this.registrosFase.actualizar(r.id, { datos }).catch(() => {})
             total++
           }
-          cursor = this.addDias(etapaStart, maxDur)
+          // Separar SECUENCIALES (con "orden", ej. anillos) de PARALELAS (mismo inicio)
+          const items = propios.map((r) => { const ov = buscarOv(fase, r.nombre); return { r, ov, dur: ov ? ov.duracion : (num(r?.datos?.duracionDias) || diasAct) } })
+          const seq = items.filter((it) => it.ov?.orden != null).sort((a, b) => (a.ov!.orden! - b.ov!.orden!))
+          const par = items.filter((it) => it.ov?.orden == null)
+          let etapaEnd = new Date(etapaStart)
+          // Secuenciales: una tras otra desde el inicio de la etapa
+          let seqCursor = new Date(etapaStart)
+          for (const it of seq) {
+            await guardar(it.r, seqCursor, it.ov, it.dur)
+            seqCursor = this.addDias(seqCursor, it.dur)
+            if (seqCursor > etapaEnd) etapaEnd = new Date(seqCursor)
+          }
+          // Paralelas: todas arrancan al inicio de la etapa
+          for (const it of par) {
+            await guardar(it.r, etapaStart, it.ov, it.dur)
+            const end = this.addDias(etapaStart, it.dur)
+            if (end > etapaEnd) etapaEnd = end
+          }
+          cursor = new Date(etapaEnd)
           if (cursor > finObra) finObra = cursor
         }
       }
