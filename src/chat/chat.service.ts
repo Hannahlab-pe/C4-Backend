@@ -221,7 +221,7 @@ MODO J3 — CRONOGRAMA DE OBRA (Gantt profesional, por rendimientos)
 - REGLA CRÍTICA — NO RE-PREGUNTES: usa TODO lo que el usuario YA dijo en esta conversación. Si ya te dio el área (ej. "terreno 800 m²"), es 800 m² — NO la vuelvas a pedir. Si ya dio profundidad/sótanos, jornada, frentes o esponjamiento, ÚSALOS. Repetir una pregunta que ya te contestó es un error grave que frustra al usuario. Si ya tienes lo mínimo (fecha + jornada + frentes + un metrado o forma de estimarlo), CALCULA y GENERA sin más vueltas.
 - REGLA CRÍTICA — ACTÚA AL CONFIRMAR: si el usuario ya dijo "sí", "genera", "créalo", "procede" o equivalente, y los datos están en la conversación, LLAMA generar_cronograma DE INMEDIATO en ESE turno. PROHIBIDO volver a pedir datos, volver a proponer, o pedir otra confirmación. Una segunda ronda de preguntas tras un "sí" es inaceptable.
 - El PROYECTO YA EXISTE (estás dentro de un proyecto). NUNCA uses generar_proyecto ni pidas "nombre del proyecto" para el cronograma. Para el cronograma solo se usa generar_cronograma.
-- Con los datos, propón los rendimientos de las partidas principales (tabla de abajo) en el MISMO mensaje en que generas o justo antes, y llama generar_cronograma pasándole "actividades" con {nombre, fase, metrado, unidad, rendimiento_diario} para las partidas grandes (el metrado sácalo del metrado ya cargado o de lo que calculaste con los datos dados; NO inventes). La herramienta calcula la duración por metrado÷rendimiento. Explica el fundamento (ej. "excavación 7,200 m³ ÷ 400 m³/día ÷ 2 frentes = 9 días útiles").
+- Con los datos, propón los rendimientos de las partidas principales (tabla de abajo) en el MISMO mensaje en que generas o justo antes, y llama generar_cronograma pasándole "actividades" con {nombre, fase, metrado, unidad, rendimiento_diario, precio_unitario} para las partidas grandes (el metrado y el precio unitario sácalos del metrado/presupuesto ya cargado, o propón un PU referencial de mercado limeño que el usuario confirme; NO inventes metrados). La herramienta calcula la duración por metrado÷rendimiento Y el costo por metrado×PU. Explica el fundamento (ej. "excavación 7,200 m³ ÷ 400 m³/día ÷ 2 frentes = 9 días útiles; costo 7,200 × S/12 = S/86,400"). Así el cronograma queda LIGADO al presupuesto: cada actividad tiene su costo, y el usuario controla plazo Y plata.
 - RENDIMIENTOS referenciales CAPECO (Perú, por cuadrilla-día — el usuario los ajusta): excavación masiva a máquina ~350-500 m³/día; excavación manual ~4 m³/día·cuadrilla; eliminación de desmonte ~200-300 m³/día; calzaduras ~2 paños/día; muros anclados ~20-30 m²/día o 1-2 anclajes/día; demolición estructural ~25-40 m³/día; concreto (vaciado) ~15-25 m³/día; encofrado ~12-18 m²/día; acero (habilitado+armado) ~250-300 kg/día; albañilería (muro) ~10 m²/día·operario; tarrajeo ~14 m²/día·operario; contrapiso/piso ~40 m²/día; instalaciones ~variable (pregunta). Son referenciales — SIEMPRE dile que los confirme.
 - Cuando pregunten "¿qué está atrasado?", "¿cómo va el cronograma?", "¿qué viene esta semana?" o "¿cuándo termina la obra?", usa consultar_cronograma: reporta las ATRASADAS primero (fecha de fin + avance), luego lo de esta semana (look-ahead), el avance global y la fecha de fin. Si hay atrasos, sugiere reprogramar o reforzar cuadrilla/frentes.
 - Para cambiar fecha/avance de UNA actividad puntual, usa actualizar_actividades (o dile que la edite con un click en la pestaña Cronograma).
@@ -1300,6 +1300,7 @@ const C4_TOOLS: LlmTool[] = [
                 rendimiento_diario: { type: 'number', description: 'Rendimiento diario de UNA cuadrilla en esa unidad (de CAPECO o confirmado por el usuario). Ej. 400 (m³/día excavación masiva).' },
                 frentes: { type: 'number', description: 'Cuadrillas en paralelo para ESTA actividad (si difiere del global).' },
                 duracion_dias: { type: 'number', description: 'Alternativa: duración en días calendario ya calculada, si no das metrado/rendimiento.' },
+                precio_unitario: { type: 'number', description: 'Precio unitario en S/ de la partida (del metrado/APU o referencial de mercado limeño). Con metrado × PU se calcula el COSTO de la actividad para el control de presupuesto. Si no lo sabes, deja 0.' },
               },
               required: ['nombre', 'fase'],
             },
@@ -3266,8 +3267,8 @@ export class ChatService {
     const diasAct = num(args.dias_por_actividad) || 4
     const utilACalendario = (util: number) => Math.max(1, Math.ceil(util * 7 / diasSem))
 
-    // Overrides fundamentados por actividad (metrado ÷ rendimiento) que pasó la IA
-    type Ov = { duracion: number; fundamento?: any }
+    // Overrides fundamentados por actividad (metrado ÷ rendimiento + costo metrado×PU) que pasó la IA
+    type Ov = { duracion: number; fundamento?: any; costo?: number; precioUnitario?: number }
     const overrides: { fase: string; nombreNorm: string; ov: Ov }[] = []
     for (const a of (Array.isArray(args.actividades) ? args.actividades : [])) {
       if (!a?.nombre || !a?.fase) continue
@@ -3280,7 +3281,9 @@ export class ChatService {
       } else {
         duracion = num(a.duracion_dias) || diasAct
       }
-      overrides.push({ fase: String(a.fase).toLowerCase(), nombreNorm: norm(a.nombre), ov: { duracion, fundamento } })
+      const pu = num(a.precio_unitario)
+      const costo = metrado && pu ? Math.round(metrado * pu) : 0
+      overrides.push({ fase: String(a.fase).toLowerCase(), nombreNorm: norm(a.nombre), ov: { duracion, fundamento, costo, precioUnitario: pu || undefined } })
     }
     const buscarOv = (fase: string, nombre: string): Ov | null => {
       const n = norm(nombre)
@@ -3293,7 +3296,7 @@ export class ChatService {
 
     let cursor = new Date(inicio)
     let finObra = new Date(inicio)
-    let total = 0, conFundamento = 0
+    let total = 0, conFundamento = 0, conCosto = 0, presupuestoTotal = 0
     try {
       res.write(`event:status\ndata:${JSON.stringify({ step: 'Armando el cronograma de obra...', icon: 'calendar' })}\n\n`)
       for (const fase of this.FASES_CRONO) {
@@ -3318,6 +3321,7 @@ export class ChatService {
             maxDur = Math.max(maxDur, dur)
             const datos: any = { ...(r?.datos ?? {}), fechaInicio: this.fechaISO(etapaStart), duracionDias: dur }
             if (ov?.fundamento) { datos.fundamentoDuracion = ov.fundamento; conFundamento++ }
+            if (ov?.costo) { datos.costoPresupuestado = ov.costo; if (ov.precioUnitario) datos.precioUnitario = ov.precioUnitario; presupuestoTotal += ov.costo; conCosto++ }
             await this.registrosFase.actualizar(r.id, { datos }).catch(() => {})
             total++
           }
@@ -3326,16 +3330,24 @@ export class ChatService {
         }
       }
       if (!total) return { error: 'No hay actividades creadas en las fases todavía. Primero arma las etapas y actividades (crear_etapas / agregar_partidas / generar_proyecto), y luego genero el cronograma.' }
-      await this.fasesDetalle.guardar(proyectoId, 'cronograma_config', { fechaInicioObra: this.fechaISO(inicio), diasSemana: diasSem, frentes: frentesG, fecha: this.hoyISO() }).catch(() => {})
+      // Línea base de presupuesto: para alertar si al editar el Gantt te pasas del costo previsto
+      const prevCfg: any = (await this.fasesDetalle.obtener(proyectoId, 'cronograma_config').catch(() => null))?.datos ?? {}
+      await this.fasesDetalle.guardar(proyectoId, 'cronograma_config', {
+        ...prevCfg, fechaInicioObra: this.fechaISO(inicio), diasSemana: diasSem, frentes: frentesG,
+        presupuestoBaseline: presupuestoTotal > 0 ? presupuestoTotal : prevCfg.presupuestoBaseline, fecha: this.hoyISO(),
+      }).catch(() => {})
       res.write(`event:cronograma_actualizado\ndata:${JSON.stringify({})}\n\n`)
       const duracion = Math.round((finObra.getTime() - inicio.getTime()) / 86400000)
-      this.logger.log(`Cronograma ${proyectoId}: ${total} act (${conFundamento} con rendimiento), inicio ${this.fechaISO(inicio)}, fin ${this.fechaISO(finObra)} (${duracion} días, jornada ${diasSem}/sem)`)
+      const fmtS = (n: number) => `S/ ${Math.round(n).toLocaleString('es-PE')}`
+      this.logger.log(`Cronograma ${proyectoId}: ${total} act (${conFundamento} c/rend, ${conCosto} c/costo, ppto ${Math.round(presupuestoTotal)}), inicio ${this.fechaISO(inicio)}, fin ${this.fechaISO(finObra)}`)
       const nota = conFundamento
-        ? `${conFundamento} de ${total} actividades tienen la duración CALCULADA por metrado ÷ rendimiento (las demás usaron un estimado).`
-        : `Las duraciones son un ESTIMADO por defecto — para el número real, dame el metrado y el rendimiento de las partidas principales y lo recalculo por metrado÷rendimiento.`
+        ? `${conFundamento} de ${total} actividades tienen la duración CALCULADA por metrado ÷ rendimiento.`
+        : `Las duraciones son un ESTIMADO por defecto.`
+      const notaCosto = conCosto ? ` Presupuesto de las ${conCosto} partidas con costo: ${fmtS(presupuestoTotal)} (línea base para el control).` : ' (Aún sin costos: dame los precios unitarios y quedará ligado el presupuesto.)'
       return {
-        ok: true, actividades: total, con_fundamento: conFundamento, inicio: this.fechaISO(inicio), fin_obra: this.fechaISO(finObra), duracion_dias: duracion, jornada_dias_semana: diasSem, frentes: frentesG,
-        mensaje: `Armé el cronograma de obra: ${total} actividades desde el ${this.fechaISO(inicio)}, fin estimado ${this.fechaISO(finObra)} (~${duracion} días calendario, jornada ${diasSem} días/sem). ${nota} Programación: fases en serie, etapas en serie, actividades de una etapa en paralelo. Repórtaselo al usuario con la fecha de fin y el fundamento (que las duraciones grandes salen de metrado÷rendimiento), y dile que lo ve/ajusta en la pestaña "Cronograma". Si faltan rendimientos, ofrécele confirmarlos para afinar.`,
+        ok: true, actividades: total, con_fundamento: conFundamento, con_costo: conCosto, presupuesto_total: Math.round(presupuestoTotal),
+        inicio: this.fechaISO(inicio), fin_obra: this.fechaISO(finObra), duracion_dias: duracion, jornada_dias_semana: diasSem, frentes: frentesG,
+        mensaje: `Armé el cronograma de obra: ${total} actividades desde el ${this.fechaISO(inicio)}, fin estimado ${this.fechaISO(finObra)} (~${duracion} días calendario, jornada ${diasSem} días/sem). ${nota}${notaCosto} Repórtaselo al usuario con la fecha de fin, el fundamento (metrado÷rendimiento) Y el presupuesto total. Dile que lo ve en la pestaña "Cronograma": ahí, al avanzar cada actividad ve el VALOR GANADO, y si edita y se pasa del presupuesto le avisa. Si faltan precios/rendimientos, ofrécele confirmarlos.`,
       }
     } catch (err: any) {
       this.logger.error('Error generando cronograma:', err?.message)
@@ -3349,6 +3361,7 @@ export class ChatService {
     const en7 = this.addDias(hoy, 7)
     const atrasadas: any[] = [], estaSemana: any[] = []
     let totalProg = 0, sumAvance = 0, finObra: Date | null = null
+    let presupuesto = 0, valorGanado = 0
     try {
       for (const fase of this.FASES_CRONO) {
         const regs = await this.registrosFase.listar(proyectoId, fase).catch(() => [] as any[])
@@ -3361,11 +3374,21 @@ export class ChatService {
           if (!finObra || fin > finObra) finObra = fin
           const av = this.avanceDeRegistro(fase, r)
           sumAvance += av
+          const costo = num(r?.datos?.costoPresupuestado)
+          if (costo) { presupuesto += costo; valorGanado += costo * av / 100 }
           if (fin < hoy && av < 100) atrasadas.push({ actividad: r.nombre, fase, fin: this.fechaISO(fin), avance: av })
           else if (ini >= hoy && ini <= en7) estaSemana.push({ actividad: r.nombre, fase, inicio: this.fechaISO(ini) })
         }
       }
       if (!totalProg) return { hay_cronograma: false, mensaje: 'Todavía no hay cronograma programado. Dile al usuario que puede armarlo con "arma el cronograma de obra empezando el [fecha]".' }
+      const fmtS = (n: number) => `S/ ${Math.round(n).toLocaleString('es-PE')}`
+      const cfg: any = (await this.fasesDetalle.obtener(proyectoId, 'cronograma_config').catch(() => null))?.datos ?? {}
+      const baseline = num(cfg.presupuestoBaseline)
+      const excedido = baseline && presupuesto > baseline ? presupuesto - baseline : 0
+      const avanceCosto = presupuesto ? Math.round(valorGanado / presupuesto * 100) : 0
+      const bloqueCosto = presupuesto
+        ? ` PRESUPUESTO: ${fmtS(presupuesto)} total; VALOR GANADO (lo ejecutado): ${fmtS(valorGanado)} (${avanceCosto}% del costo).${excedido ? ` ⚠️ El presupuesto actual EXCEDE la línea base en ${fmtS(excedido)} — avísale.` : ''}`
+        : ''
       return {
         hay_cronograma: true,
         total_programadas: totalProg,
@@ -3374,7 +3397,8 @@ export class ChatService {
         atrasadas: atrasadas.slice(0, 15),
         num_atrasadas: atrasadas.length,
         esta_semana: estaSemana.slice(0, 15),
-        mensaje: `Estado del cronograma: ${totalProg} actividades programadas, avance global ${Math.round(sumAvance / totalProg)}%, fin de obra estimado ${finObra ? this.fechaISO(finObra) : '—'}. Hay ${atrasadas.length} atrasada(s) y ${estaSemana.length} que arrancan esta semana. Repórtaselo al usuario de forma clara y breve: primero las ATRASADAS (con su fecha de fin y avance), luego lo de esta semana. Si hay atrasos, sugiere reprogramar o reforzar cuadrilla.`,
+        presupuesto_total: Math.round(presupuesto), valor_ganado: Math.round(valorGanado), avance_costo_pct: avanceCosto, excedido_presupuesto: Math.round(excedido),
+        mensaje: `Estado del cronograma: ${totalProg} actividades, avance físico global ${Math.round(sumAvance / totalProg)}%, fin de obra ${finObra ? this.fechaISO(finObra) : '—'}. Hay ${atrasadas.length} atrasada(s) y ${estaSemana.length} que arrancan esta semana.${bloqueCosto} Repórtaselo claro y breve: primero las ATRASADAS (fecha de fin + avance), luego lo de esta semana (look-ahead), y el estado de COSTO (presupuesto vs valor ganado). Si hay atrasos o se excede el presupuesto, avísale y sugiere reprogramar/reforzar.`,
       }
     } catch (err: any) {
       this.logger.error('Error consultando cronograma:', err?.message)
