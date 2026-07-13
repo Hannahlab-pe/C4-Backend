@@ -2405,6 +2405,7 @@ export class ChatService {
   // ─── Construcción de contenido de usuario con archivo ────────────────────────
 
   private async buildUserContent(dto: StreamChatDto): Promise<string | LlmContentPart[]> {
+    this.logger.log(`buildUserContent: adjunto="${dto.archivoNombre ?? '(sin nombre)'}" tipo="${dto.archivoTipo ?? '(sin tipo)'}" base64_len=${dto.archivoBase64?.length ?? 0}`)
     if (!dto.archivoBase64) return dto.mensaje
 
     const tipo = (dto.archivoTipo ?? '').toLowerCase()
@@ -2464,6 +2465,7 @@ export class ChatService {
     // Excel (presupuesto/metrados) → CSV para leer y cargar partidas
     if (/\.(xlsx|xls|csv)$/.test(nombre) || tipo.includes('sheet') || tipo.includes('excel')) {
       const csv = this.parseExcel(Buffer.from(dto.archivoBase64, 'base64')).slice(0, 16000)
+      this.logger.log(`buildUserContent: EXCEL detectado, CSV parseado len=${csv.length}`)
       if (!csv.trim()) return `${dto.mensaje}\n\n(No pude leer el Excel adjunto "${dto.archivoNombre ?? ''}".)`
       return `${dto.mensaje || 'Te paso el presupuesto.'}\n\n---\nEL EXCEL DEL PRESUPUESTO YA ESTÁ ABAJO (su contenido en CSV, "${dto.archivoNombre ?? 'presupuesto.xlsx'}"). NO pidas que lo adjunten ni preguntes "¿qué hoja?" ni "¿qué tipo de análisis?": YA lo tienes, ANALÍZALO DE INMEDIATO en este turno. Puede traer VARIAS hojas — usa la que tiene las PARTIDAS (columnas tipo METRADO / UNIDAD / PARCIAL, ej. la hoja "PRESUPUESTO"); ignora hojas auxiliares de ratios o precios. Eres el ingeniero experto, texto plano sin markdown: (1) RESUMEN: nombre del proyecto, ubicación, monto TOTAL en S/, N° de partidas, y los capítulos que ves. (2) 1-3 RECOMENDACIONES honestas (qué cubre y qué NO, ej. "es solo el casco/obra gris — no incluye excavación ni acabados"; qué partidas pesan más). (3) OFRÉCELE cargar las partidas (cargar_presupuesto, una vez por fase; precio = PU = M.O+MAT o PARCIAL÷metrado) y armar el cronograma. Clasifica por fase (provisionales/preliminares→administracion; concreto/muros/losas/casco→construccion; tarrajeo/pisos/pintura→acabados). NO inventes partidas; reporta números reales.\n\n===== PRESUPUESTO (CSV) =====\n${csv}`
     }
