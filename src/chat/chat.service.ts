@@ -173,6 +173,7 @@ PLANOS DXF (AutoCAD/ZWCAD): cuando el ingeniero adjunte un plano .dxf, recibirá
 - Resume qué ves: n° de pisos y sótanos (dedúcelos de leyendas tipo "SOTANO 1/2", "PISO 5", "AZOTEA", niveles N.P.T.), departamentos, estacionamientos (bloques/textos), cuadro de áreas, ejes, leyenda.
 - Da recomendaciones concretas y OFRECE crear registros con lo que dedujiste, pidiendo confirmar. Ej: "Tu plano muestra 4 sótanos → ¿te armo las calzaduras con 4 anillos? / el movimiento de tierras de los 4 sótanos? / los vaciados por piso?" y al aceptar usa crear_calzaduras / crear_movimiento_tierras / crear_vaciados / crear_etapas.
 - Sé honesto: del DXF salen textos/capas/bloques/medidas, no la geometría interpretada como un humano. Si algo no está en los textos, dilo y pídelo.
+- ÁREAS EXACTAS DEL CAD (clave para el volumen de excavación): a diferencia del PDF (donde el área está dibujada y no se puede medir), del DXF SÍ se mide la geometría. Cuando el usuario suba un .dxf y quiera el ÁREA del terreno, la HUELLA DE EXCAVACIÓN o el volumen, llama a analizar_cad_dxf: mide las áreas de todas las regiones cerradas por capa y saca los niveles N.P.T./N.F.Z. Luego MUÉSTRALE las áreas por capa y PREGÚNTALE cuál es la huella de excavación; con esa área + la profundidad, calcula el volumen (calcular_volumen_excavacion). Así el volumen sí sale automático y exacto.
 - MODIFICAR EL PLANO: si el usuario pide que le UBIQUES/DIBUJES la grúa en SU plano (ej: "dame el mismo plano pero con la grúa", "márcame dónde va la grúa"), usa ubicar_grua_en_plano (requiere que haya subido el .dxf). Pásale el modelo/radio/base de la grúa que recomendaste y el frente/fondo reales (mts). NO necesitas ejecutar analisis_completo para esto. Tras llamarla, explica la esquina elegida y aclara que es una PROPUESTA sobre su plano (la posición definitiva se valida en obra), y comenta las medidas que devolvió.
 
 MODO G — SEGURIDAD (SSOMA / RNE G.050)
@@ -1565,6 +1566,14 @@ const C4_TOOLS: LlmTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'analizar_cad_dxf',
+      description: 'Lee el ÚLTIMO archivo CAD en formato DXF que el usuario subió al proyecto y MIDE las áreas exactas de sus regiones cerradas (por capa) usando la geometría real, además de extraer los niveles N.P.T./N.F.Z. Úsala cuando el usuario suba un DXF o pida sacar el área/huella de excavación del CAD. Es la forma de obtener el ÁREA EXACTA del terreno/excavación (que el PDF no da). Solo funciona con DXF (texto); el DWG binario no se puede leer — si el usuario tiene DWG, dile que lo exporte a DXF. Tras leerlo, muestra las áreas por capa y pregunta cuál es la huella de excavación.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
 ]
 
 // Plantilla de etapas por fase (keys = las que usan los registros de generar_proyecto).
@@ -2418,6 +2427,7 @@ export class ChatService {
     if (name === 'crear_calzaduras') return this.toolCrearCalzaduras(args, res, proyectoId)
     if (name === 'crear_movimiento_tierras') return this.toolCrearMovimientoTierras(args, res, proyectoId)
     if (name === 'registrar_estudio_suelos') return this.toolRegistrarEstudioSuelos(args, res, proyectoId)
+    if (name === 'analizar_cad_dxf') return this.toolAnalizarCadDxf(args, res, proyectoId)
     if (name === 'crear_vaciados') return this.toolCrearVaciados(args, res, proyectoId)
     if (name === 'actualizar_actividades') return this.toolActualizarActividades(args, res, proyectoId)
     if (name === 'crear_productividad') return this.toolCrearProductividad(args, res, proyectoId)
@@ -3462,6 +3472,100 @@ export class ChatService {
     } catch (err: any) {
       this.logger.error('Error calculando volumen:', err?.message)
       return { error: `Error calculando el volumen: ${err?.message}` }
+    }
+  }
+
+  /** Analiza el TEXTO de un DXF: mide las áreas de las regiones cerradas (por capa) y saca los niveles N.P.T./N.F.Z. */
+  private analizarDxfTexto(dxfText: string): any {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const DxfParser = require('dxf-parser')
+    let dxf: any
+    try { dxf = new DxfParser().parseSync(dxfText) } catch (e: any) { return { error: `El archivo no es un DXF de texto válido (${e?.message}). Si es DWG, expórtalo a DXF desde AutoCAD/ACC.` } }
+    if (!dxf?.entities?.length) return { error: 'El DXF no tiene entidades legibles.' }
+
+    const FACT: Record<number, number> = { 1: 0.0254, 2: 0.3048, 4: 0.001, 5: 0.01, 6: 1 } // unidades → metros
+    const UNAME: Record<number, string> = { 0: 'sin definir', 1: 'pulgadas', 2: 'pies', 4: 'milímetros', 5: 'centímetros', 6: 'metros' }
+    const insunits = Number(dxf.header?.['$INSUNITS'] ?? 0)
+    let factLin = FACT[insunits] ?? 1
+
+    const shoelace = (verts: any[]) => {
+      let a = 0
+      for (let i = 0; i < verts.length; i++) {
+        const p = verts[i], q = verts[(i + 1) % verts.length]
+        a += (p.x ?? 0) * (q.y ?? 0) - (q.x ?? 0) * (p.y ?? 0)
+      }
+      return Math.abs(a) / 2
+    }
+
+    const regionesU: { capa: string; area_u2: number }[] = []
+    const niveles = new Set<string>()
+    for (const e of dxf.entities) {
+      if ((e.type === 'LWPOLYLINE' || e.type === 'POLYLINE') && Array.isArray(e.vertices) && e.vertices.length >= 3 && (e.shape || e.closed)) {
+        const areaU = shoelace(e.vertices)
+        if (areaU > 0) regionesU.push({ capa: String(e.layer || '0'), area_u2: areaU })
+      } else if (e.type === 'TEXT' || e.type === 'MTEXT') {
+        const txt = String(e.text ?? '')
+        if (/N\.?P\.?T|N\.?F\.?Z/i.test(txt)) {
+          const m = txt.match(/-?\d{1,2}\.\d{2}/g)
+          if (m) m.forEach((v) => niveles.add(v))
+        }
+      }
+    }
+    if (!regionesU.length) return { error: 'No encontré regiones cerradas (polilíneas) en el DXF. ¿Exportaste la vista con la geometría del terreno/excavación?' }
+
+    // Unidades: si están sin definir y las áreas son enormes, casi seguro están en mm
+    let unidades = UNAME[insunits] ?? 'sin definir'
+    const maxU = regionesU.reduce((m, r) => Math.max(m, r.area_u2), 0)
+    if ((insunits === 0 || FACT[insunits] === undefined) && maxU > 500000) { factLin = 0.001; unidades = 'milímetros (inferido por magnitud)' }
+    const factArea = factLin * factLin
+
+    const regiones = regionesU
+      .map((r) => ({ capa: r.capa, area_m2: Math.round(r.area_u2 * factArea) }))
+      .filter((r) => r.area_m2 >= 1)
+      .sort((a, b) => b.area_m2 - a.area_m2)
+
+    const esCand = (c: string) => /terreno|lote|excav|perimetr|per[ií]metr|l[ií]mite|contorno|platea/i.test(c)
+    const candidatos = regiones.filter((r) => esCand(r.capa)).slice(0, 5)
+
+    return {
+      unidades,
+      total_regiones: regiones.length,
+      regiones_top: regiones.slice(0, 12),
+      candidatos_terreno: candidatos,
+      niveles: [...niveles].sort(),
+    }
+  }
+
+  private async toolAnalizarCadDxf(_args: Record<string, any>, _res: Response, proyectoId: string): Promise<any> {
+    const doc = await this.documentos.ultimoDxf(proyectoId).catch(() => null)
+    if (!doc?.base64) {
+      return { error: 'No hay ningún CAD/DXF subido a este proyecto. Pídele al usuario que EXPORTE el plano (DWG) a formato DXF desde AutoCAD/ACC y lo suba aquí (el DWG binario no se puede leer, el DXF sí).' }
+    }
+    try {
+      const texto = Buffer.from(doc.base64, 'base64').toString('utf8')
+      const r = this.analizarDxfTexto(texto)
+      if (r.error) return r
+      const fmt = (n: number) => n.toLocaleString('es-PE')
+      const listaCand = r.candidatos_terreno.length
+        ? r.candidatos_terreno.map((c: any) => `${c.capa}: ${fmt(c.area_m2)} m²`).join('; ')
+        : ''
+      const listaTop = r.regiones_top.slice(0, 6).map((c: any) => `${c.capa}: ${fmt(c.area_m2)} m²`).join('; ')
+      this.logger.log(`DXF ${doc.nombre} (${proyectoId}): ${r.total_regiones} regiones, unidades ${r.unidades}`)
+      return {
+        ok: true,
+        archivo: doc.nombre,
+        unidades: r.unidades,
+        candidatos_terreno: r.candidatos_terreno,
+        regiones_top: r.regiones_top,
+        niveles: r.niveles,
+        mensaje: `Leí el CAD "${doc.nombre}" (unidades: ${r.unidades}). Encontré ${r.total_regiones} regiones cerradas. ` +
+          (listaCand ? `Candidatas a terreno/excavación (por nombre de capa): ${listaCand}. ` : `No hay capas con nombre obvio de terreno; las regiones más grandes son: ${listaTop}. `) +
+          (r.niveles.length ? `Niveles hallados (N.P.T./N.F.Z.): ${r.niveles.join(', ')} m. ` : '') +
+          `Repórtale al usuario las áreas por capa y PREGÚNTALE cuál región es la HUELLA DE EXCAVACIÓN (o el terreno). Cuando te confirme, usa esa área con calcular_volumen_excavacion + la profundidad de los niveles. Si las unidades son "sin definir", ADVIÉRTELE que confirme la escala. Sé honesto: estas áreas salen de la geometría del DXF (exactas si la capa es la correcta).`,
+      }
+    } catch (e: any) {
+      this.logger.error('Error analizando DXF:', e?.message)
+      return { error: `No pude analizar el DXF: ${e?.message}` }
     }
   }
 
