@@ -1912,6 +1912,7 @@ export class ChatService {
 
     // Contexto de documentos persistidos del proyecto (RAG por relevancia a la consulta)
     const contextoDocumentos = await this.documentos.getContextoRelevante(dto.proyectoId, dto.mensaje ?? '').catch(() => '')
+    const contextoFichas = await this.contextoFichasExcavacion(dto.proyectoId).catch(() => '')
     const imagenesProyecto = await this.documentos.getImagenesParaLlm(dto.proyectoId)
 
     // Construir el último mensaje del usuario — puede incluir archivo adjunto puntual
@@ -1925,7 +1926,7 @@ export class ChatService {
     const contextoUi = dto.faseActual && FASES_UI[dto.faseActual]
       ? `\n\n---\n## CONTEXTO DE PANTALLA\nEl usuario está viendo ahora el módulo de la fase **${FASES_UI[dto.faseActual]}** (slug: ${dto.faseActual}). Si pide una acción sin nombrar la fase (ej: "completa los trabajos preliminares"), asume que se refiere a ESTA fase. Aun así, si el nombre puede existir en otras fases o hay ambigüedad, CONFÍRMALE a qué fase/etapa se refiere antes de actuar.`
       : ''
-    const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + contextoUi
+    const systemPrompt = SYSTEM_PROMPT + contextoFichas + contextoDocumentos + contextoUi
 
     // Mensajes del historial previo
     const historialMsgs: LlmMessage[] = history.slice(0, -1).map((m) => ({
@@ -1973,6 +1974,42 @@ export class ChatService {
   }
 
   /** Resumen conciso del estado actual del proyecto, para que el bot responda "¿cómo va la obra?". */
+  /**
+   * Datos ESTRUCTURADOS ya extraídos/registrados en el módulo (ficha de suelos, volumen…).
+   * Se inyectan al chat para responder con precisión SIN depender del vocabulario del PDF
+   * (ej. el usuario pregunta "capacidad portante" y el EMS dice "presión admisible").
+   */
+  private async contextoFichasExcavacion(proyectoId: string): Promise<string> {
+    const partes: string[] = []
+    try {
+      const suelos: any = (await this.fasesDetalle.obtener(proyectoId, 'suelos').catch(() => null))?.datos
+      if (suelos) {
+        const LABELS: Record<string, string> = {
+          numeroInforme: 'N° de informe', laboratorio: 'Laboratorio', fecha: 'Fecha', ubicacion: 'Ubicación',
+          numeroCalicatas: 'N° de calicatas/sondajes', profundidadInvestigada: 'Profundidad investigada',
+          tipoSuelo: 'Tipo de suelo (SUCS)', perfilEstratigrafico: 'Perfil estratigráfico', nivelFreatico: 'Nivel freático',
+          pesoEspecifico: 'Peso específico (γ)', tipoCimentacion: 'Tipo de cimentación',
+          capacidadPortante: 'Capacidad portante admisible (presión admisible qa)', profCimentacion: 'Profundidad de cimentación',
+          factorSeguridad: 'Factor de seguridad', asentamiento: 'Asentamiento estimado',
+          anguloFriccion: 'Ángulo de fricción (φ)', cohesion: 'Cohesión (c)', empujeActivo: 'Empuje activo (Ka)',
+          zonaSismica: 'Zona sísmica', factorZ: 'Factor de zona (Z)', tipoPerfil: 'Tipo de perfil de suelo sísmico',
+          factorSuelo: 'Factor de suelo (S)', periodoTp: 'Período Tp', periodoTl: 'Período Tl',
+          licuacion: 'Potencial de licuación', colapso: 'Potencial de colapso', expansion: 'Potencial de expansión',
+          agresividad: 'Agresividad al concreto', tipoCemento: 'Cemento recomendado',
+          sistemaSostenimiento: 'Sistema de sostenimiento recomendado', recomendaciones: 'Recomendaciones',
+        }
+        const lineas = Object.entries(LABELS).filter(([k]) => suelos[k] && String(suelos[k]).trim()).map(([k, lab]) => `  - ${lab}: ${suelos[k]}`)
+        if (lineas.length) partes.push(`### Estudio de Mecánica de Suelos (E.050) — ficha extraída${suelos.numeroInforme ? ` (informe ${suelos.numeroInforme})` : ''}:\n${lineas.join('\n')}`)
+      }
+      const vol: any = (await this.fasesDetalle.obtener(proyectoId, 'excavacion__volumen').catch(() => null))?.datos
+      if (vol?.vol_banco_m3) {
+        partes.push(`### Volumen de excavación calculado:\n  - Excavación masiva: ${vol.vol_masiva_m3} m³; en banco: ${vol.vol_banco_m3} m³; suelto (×${vol.factor_esponjamiento ?? 1.3}): ${vol.vol_suelto_m3} m³; ≈ ${vol.viajes_volquete} viajes de volquete.${vol.zapatas_pendientes ? ' Sobre-excavación de zapatas: PENDIENTE (falta el cuadro de zapatas).' : ''}`)
+      }
+    } catch { /* contexto opcional */ }
+    if (!partes.length) return ''
+    return `\n\n---\n## DATOS ESTRUCTURADOS DEL PROYECTO (fichas del módulo, ya extraídos)\nEstos datos YA están registrados en el módulo (la IA los extrajo del expediente). Úsalos como fuente PRIORITARIA para responder con precisión, aunque el usuario use otras palabras (ej. "capacidad portante" = "presión admisible"). Al citarlos, di que salen del estudio de suelos / del análisis del proyecto.\n\n${partes.join('\n\n')}\n---`
+  }
+
   private async resumenProyecto(proyectoId: string): Promise<string> {
     const FASES = [
       { key: 'demolicion', label: 'Demolición' },
@@ -2079,6 +2116,7 @@ export class ChatService {
 
     // El contexto del proyecto (documentos + estado) solo se inyecta cuando YA hay un proyecto elegido.
     const contextoDocumentos = seleccionado ? await this.documentos.getContextoRelevante(proyectoId, message ?? '').catch(() => '') : ''
+    const contextoFichas = seleccionado ? await this.contextoFichasExcavacion(proyectoId).catch(() => '') : ''
     const estadoProyecto = seleccionado ? await this.resumenProyecto(proyectoId).catch(() => '') : ''
 
     // Sin proyecto elegido → el bot primero pregunta en cuál trabajar.
@@ -2114,7 +2152,7 @@ export class ChatService {
       `- ZAPATAS con honestidad: para la sobre-excavación necesitas las DIMENSIONES de cada zapata (largo×ancho), no solo su N.F.Z. Si el plano muestra muchas N.F.Z. pero NO puedes leer sus dimensiones, NO inventes zapatas ni reportes un volumen localizado casi cero como si estuviera completo: llama la tool con "zapatas_pendientes": true (y "num_zapatas_visibles" si las contaste) para reportar que las zapatas quedan PENDIENTES y pedir el cuadro de zapatas.\n` +
       `- Reporta el volumen con DESGLOSE (la tabla de niveles + la localizada de zapatas), factor 1.3, y sé HONESTO: las ÁREAS de cada nivel son ESTIMADAS del dibujo salvo que tengas el cuadro de metrados o el DWG/CAD; para el EXACTO en terreno irregular se necesita el levantamiento topográfico (secciones/cuadrícula) o el metrado del expediente — ofrécelo. Cita de qué archivo salió cada dato. REGLA DE ORO: EXTRAE tú mismo del/los documento(s) el área, los niveles, las zapatas y las profundidades — NO le pidas al usuario un dato que ya está en un plano que te mandó (esa es tu chamba, no la suya). Si un dato NO está en NINGÚN documento (ej. el área exacta de cada sector no se puede medir del PDF), dile con honestidad qué falta y EN QUÉ documento suele estar (el área del terreno en el cuadro de áreas del plano de arquitectura/ubicación; las áreas exactas por nivel en el DWG/CAD o el cuadro de metrados de movimiento de tierras) y pídeselo.\n` +
       `- Si el resultado es largo (un análisis), resume lo clave (TIR, N° de deptos, etc.) en pocas líneas.`
-    const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + estadoProyecto + notaWhatsapp + seleccionContext
+    const systemPrompt = SYSTEM_PROMPT + contextoFichas + contextoDocumentos + estadoProyecto + notaWhatsapp + seleccionContext
 
     // Voz: si viene audio, transcribir y usar SOLO la transcripción real.
     // (El bridge puede mandar un texto placeholder tipo "Esta es una nota de voz, transcríbela"
