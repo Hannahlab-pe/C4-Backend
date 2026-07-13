@@ -1494,7 +1494,7 @@ const C4_TOOLS: LlmTool[] = [
           profundidad_m: { type: 'number', description: 'MODO SIMPLE: profundidad de la EXCAVACIÓN MASIVA general en m (hasta el fondo general, ej. N.P.T. -21.40 → 21). MUY IMPORTANTE: NO sumes aquí lo que las zapatas bajan de más (eso se aplicaría a TODO el terreno y sobreestima) — la profundidad extra de las zapatas va SOLO en el parámetro "zapatas". Si el fondo tiene varios niveles, usa "sectores" en vez de esto.' },
           zapatas: {
             type: 'array',
-            description: 'Zapatas/cimientos que bajan MÁS que el fondo general (sobre-excavación localizada). Cada una: cantidad × largo × ancho × profundidad_extra (lo que baja debajo del fondo general). De los detalles de cimentación.',
+            description: 'Zapatas/cimientos que bajan MÁS que el fondo general (sobre-excavación localizada). Cada una: cantidad × largo × ancho × profundidad_extra (lo que baja debajo del fondo general). De los detalles de cimentación. IMPORTANTE: incluye SOLO zapatas de las que tengas las dimensiones REALES (largo×ancho). NO las inventes: si el plano muestra muchas N.F.Z. pero no puedes leer sus dimensiones, deja esto vacío y marca zapatas_pendientes=true.',
             items: {
               type: 'object',
               properties: {
@@ -1505,7 +1505,9 @@ const C4_TOOLS: LlmTool[] = [
               },
             },
           },
-          volumen_localizado_m3: { type: 'number', description: 'Alternativa: volumen total de sobre-excavación localizada en m³, si ya lo tienes calculado.' },
+          zapatas_pendientes: { type: 'boolean', description: 'Ponlo en TRUE cuando el plano tiene VARIAS zapatas/N.F.Z. pero NO pudiste extraer sus dimensiones (largo×ancho) — así se reporta con HONESTIDAD que la sobre-excavación de zapatas queda PENDIENTE (requiere el cuadro de zapatas / detalle de cimentación), en vez de un volumen localizado casi cero que parezca completo. Si marcas esto, NO inventes zapatas.' },
+          num_zapatas_visibles: { type: 'number', description: 'Opcional: cuántas zapatas/N.F.Z. ves en el plano (aunque no tengas sus dimensiones), para mencionarlo al reportar las pendientes.' },
+          volumen_localizado_m3: { type: 'number', description: 'Alternativa: volumen total de sobre-excavación localizada en m³, si ya lo tienes calculado. NO lo inventes; solo si de verdad lo tienes.' },
           factor_esponjamiento: { type: 'number', description: 'Factor de esponjamiento. Por defecto 1.3 (Perú).' },
           m3_por_viaje: { type: 'number', description: 'Capacidad del volquete en m³. Por defecto 6.' },
           fuentes: { type: 'string', description: 'De qué documento/plano salió cada dato, para citarlo (ej: "profundidad del EMS 5673; zapatas del detalle de cimentación L09_0111; dimensiones dadas por el usuario").' },
@@ -2037,6 +2039,7 @@ export class ChatService {
       `- PROYECTOS: el jefe puede tener varios proyectos. Para ver la lista usa listar_proyectos; para cambiar, seleccionar_proyecto. Si dice "lista mis proyectos", "trabaja en el proyecto X", "cambia a Y", úsalas. El proyecto elegido queda activo para todo lo que sigue.\n` +
       `- VOLUMEN DE EXCAVACIÓN (riguroso): si preguntan cuánto excavar / cuántos volquetes, usa calcular_volumen_excavacion. La EXCAVACIÓN MASIVA tiene dos modos: (A) TERRENO ESCALONADO — si el plano de cimentación muestra VARIOS niveles distintos de N.P.T. (el fondo NO es plano), arma el parámetro "sectores": una fila por nivel con su ÁREA y su PROFUNDIDAD (la tool suma área×profundidad de cada uno). (B) BLOQUE SIMPLE — si el fondo es parejo, un solo "area_m2" × "profundidad_m". A eso SIEMPRE súmale (2) la SOBRE-EXCAVACIÓN de zapatas/cimientos que bajan MÁS que el fondo (cotas N.F.Z./H de los detalles de cimentación; en "zapatas" o "volumen_localizado_m3"). NUNCA sumes la profundidad extra de las zapatas a la profundidad general/sector (aplicaría a TODA el área y sobreestima): eso va SOLO en "zapatas".\n` +
       `- LEER UN PLANO DE CIMENTACIÓN (crítico para el volumen): cuando te manden el plano de cimentación/estructuras, COMBINA las dos fuentes — el TEXTO extraído del PDF (ahí vienen todos los N.P.T., N.F.Z. y las alturas H de zapatas) con lo que VES en la IMAGEN del plano (qué sector es cada nivel, dónde están las zapatas). Con eso arma tú mismo la tabla de niveles y las zapatas, y calcula. Saca la PROFUNDIDAD de cada sector restando: profundidad = nivel de la superficie del terreno − cota del fondo (N.P.T.) de ese sector.\n` +
+      `- ZAPATAS con honestidad: para la sobre-excavación necesitas las DIMENSIONES de cada zapata (largo×ancho), no solo su N.F.Z. Si el plano muestra muchas N.F.Z. pero NO puedes leer sus dimensiones, NO inventes zapatas ni reportes un volumen localizado casi cero como si estuviera completo: llama la tool con "zapatas_pendientes": true (y "num_zapatas_visibles" si las contaste) para reportar que las zapatas quedan PENDIENTES y pedir el cuadro de zapatas.\n` +
       `- Reporta el volumen con DESGLOSE (la tabla de niveles + la localizada de zapatas), factor 1.3, y sé HONESTO: las ÁREAS de cada nivel son ESTIMADAS del dibujo salvo que tengas el cuadro de metrados o el DWG/CAD; para el EXACTO en terreno irregular se necesita el levantamiento topográfico (secciones/cuadrícula) o el metrado del expediente — ofrécelo. Cita de qué archivo salió cada dato. REGLA DE ORO: EXTRAE tú mismo del/los documento(s) el área, los niveles, las zapatas y las profundidades — NO le pidas al usuario un dato que ya está en un plano que te mandó (esa es tu chamba, no la suya). Si un dato NO está en NINGÚN documento (ej. el área exacta de cada sector no se puede medir del PDF), dile con honestidad qué falta y EN QUÉ documento suele estar (el área del terreno en el cuadro de áreas del plano de arquitectura/ubicación; las áreas exactas por nivel en el DWG/CAD o el cuadro de metrados de movimiento de tierras) y pídeselo.\n` +
       `- Si el resultado es largo (un análisis), resume lo clave (TIR, N° de deptos, etc.) en pocas líneas.`
     const systemPrompt = SYSTEM_PROMPT + contextoDocumentos + estadoProyecto + notaWhatsapp + seleccionContext
@@ -3228,6 +3231,10 @@ export class ChatService {
       }
       volLocalizado = Math.round(volLocalizado)
     }
+    // Honestidad: si la IA vio muchas zapatas/N.F.Z. pero no pudo dimensionarlas, se reporta como PENDIENTE
+    // (no como un localizado casi cero que parezca completo).
+    const numZapVisibles = num(args.num_zapatas_visibles)
+    const zapatasPendientes = args.zapatas_pendientes === true && volLocalizado <= 0
     const volBanco = volMasiva + volLocalizado
     const volSuelto = Math.round(volBanco * factor)
     const viajes = Math.ceil(volSuelto / m3viaje)
@@ -3238,6 +3245,7 @@ export class ChatService {
         ...prev, area_m2: Math.round(areaTotal), profundidad_m: usaSectores ? undefined : profSimple,
         sectores: usaSectores ? sectores : undefined, factor_esponjamiento: factor,
         vol_masiva_m3: volMasiva, vol_localizado_m3: volLocalizado,
+        zapatas_pendientes: zapatasPendientes || undefined, num_zapatas_visibles: numZapVisibles,
         vol_banco_m3: volBanco, vol_suelto_m3: volSuelto, viajes_volquete: viajes, m3_por_viaje: m3viaje,
         fuentes: args.fuentes ? String(args.fuentes).slice(0, 300) : undefined, fecha: this.hoyISO(),
       })
@@ -3256,17 +3264,26 @@ export class ChatService {
       } else {
         desglose = `Excavación masiva: ${fmt(areaSimple!)} m² × ${profSimple} m = ${fmt(volMasiva)} m³.`
       }
+      const pendienteTxt = zapatasPendientes
+        ? ` Total en banco: ${fmt(volBanco)} m³. La sobre-excavación de ZAPATAS quedó PENDIENTE: ${numZapVisibles ? `se ven ~${numZapVisibles} zapatas/N.F.Z. en el plano` : 'el plano muestra varias zapatas/N.F.Z.'} pero sin dimensiones (largo×ancho) legibles — requiere el cuadro de zapatas / detalle de cimentación.`
+        : ` En banco: ${fmt(volBanco)} m³ (aún sin sumar la sobre-excavación de zapatas).`
       desglose += volLocalizado > 0
         ? ` Sobre-excavación localizada (zapatas): ${fmt(volLocalizado)} m³. Total en banco: ${fmt(volBanco)} m³.`
-        : ` En banco: ${fmt(volBanco)} m³ (aún sin sumar la sobre-excavación de zapatas).`
+        : pendienteTxt
 
+      const instruccionZapatas = volLocalizado > 0
+        ? ''
+        : zapatasPendientes
+          ? 'Reporta con HONESTIDAD que la sobre-excavación de las zapatas quedó PENDIENTE (el plano muestra varias N.F.Z. pero no se pudieron leer sus dimensiones); NO des un número casi cero como si estuviera completo, y pide el cuadro de zapatas / detalle de cimentación.'
+          : 'Menciona que aún falta sumar la sobre-excavación de las zapatas (de los detalles de cimentación).'
       return {
         ok: true, modo: usaSectores ? 'por_niveles' : 'bloque_simple',
         area_total_m2: Math.round(areaTotal), factor_esponjamiento: factor,
         sectores: usaSectores ? sectores : undefined,
         volumen_masiva_m3: volMasiva, volumen_localizado_m3: volLocalizado,
+        zapatas_pendientes: zapatasPendientes, num_zapatas_visibles: numZapVisibles,
         volumen_banco_m3: volBanco, volumen_suelto_m3: volSuelto, viajes_volquete: viajes,
-        mensaje: `${desglose} × ${factor} (esponjamiento en Perú) = ${fmt(volSuelto)} m³ SUELTOS a eliminar ≈ ${viajes} viajes de volquete de ${m3viaje} m³. Repórtalo al usuario CON EL DESGLOSE${usaSectores ? ' por niveles (la tabla de sectores)' : ' (masiva + localizada)'}, citando de qué archivo salió cada dato (${args.fuentes || 'los documentos y lo que indicó'}). ${volLocalizado > 0 ? '' : 'Menciona que aún falta sumar la sobre-excavación de las zapatas (de los detalles de cimentación).'} IMPORTANTE, sé HONESTO: ${usaSectores ? 'las ÁREAS de cada nivel son ESTIMADAS del dibujo salvo que tengas un cuadro de metrados o el DWG/CAD' : 'es un estimado por volumen de prisma que asume terreno plano'}; el volumen EXACTO en terreno irregular requiere el LEVANTAMIENTO TOPOGRÁFICO (método de secciones/cuadrícula) o el metrado del expediente — ofrécele calcularlo exacto si te pasa esa data.`,
+        mensaje: `${desglose} × ${factor} (esponjamiento en Perú) = ${fmt(volSuelto)} m³ SUELTOS a eliminar ≈ ${viajes} viajes de volquete de ${m3viaje} m³. Repórtalo al usuario CON EL DESGLOSE${usaSectores ? ' por niveles (la tabla de sectores)' : ' (masiva + localizada)'}, citando de qué archivo salió cada dato (${args.fuentes || 'los documentos y lo que indicó'}). ${instruccionZapatas} IMPORTANTE, sé HONESTO: ${usaSectores ? 'las ÁREAS de cada nivel son ESTIMADAS del dibujo salvo que tengas un cuadro de metrados o el DWG/CAD' : 'es un estimado por volumen de prisma que asume terreno plano'}; el volumen EXACTO en terreno irregular requiere el LEVANTAMIENTO TOPOGRÁFICO (método de secciones/cuadrícula) o el metrado del expediente — ofrécele calcularlo exacto si te pasa esa data.`,
       }
     } catch (err: any) {
       this.logger.error('Error calculando volumen:', err?.message)
