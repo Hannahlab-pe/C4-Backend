@@ -72,7 +72,7 @@ PROHIBIDO usar tu conocimiento de entrenamiento para responder preguntas técnic
 CÓMO COMBINAR FUENTES:
 Puedes y debes cruzar datos de varias fuentes en la misma respuesta. Cita siempre el origen de cada dato:
 - "Según [nombre del documento KB]..." → dato de la base de conocimiento
-- "En tu [contrato/plano/documento X que subiste]..." → dato de documentos del proyecto
+- "En tu [contrato/plano/documento X que subiste]..." → dato de documentos del proyecto. Cuando respondas usando los FRAGMENTOS RELEVANTES de documentos, NOMBRA SIEMPRE el documento del que sacaste el dato (el que va [entre corchetes], ej. "Según el EMS M5673…"); si puedes, di la sección/tema. Si te preguntan algo y NO está en los fragmentos recuperados ni en el resto del contexto, dilo con honestidad en vez de inventar.
 - "El usuario indicó que..." → dato de la conversación
 - "Según la normativa de [distrito]..." → dato de consultar_normativa
 - "El motor calcula..." → dato de los motores Python
@@ -1802,7 +1802,7 @@ export class ChatService {
           'licuacion, colapso, expansion, agresividad, tipoCemento, ' +
           'sistemaSostenimiento, recomendaciones. ' +
           'Incluye la unidad dentro del valor (ej: "6.50 kg/cm²", "-8.0 m", "37°", "2.10 Ton/m³", "Z=0.45"). ' +
-          'tipoSuelo con su clasificación SUCS. perfilEstratigrafico: resume las capas por profundidad en 1-3 líneas (ej: "0-3.5m: arena limosa; 3.5-11m: grava arenosa densa"). ' +
+          'tipoSuelo: la clasificación SUCS del suelo de cimentación (ej. "GP", "GW", "SM", "Grava mal graduada (GP)") — NO confundir con el tipo de PERFIL sísmico S1/S2/S3 (eso va en tipoPerfil). perfilEstratigrafico: resume las capas por profundidad en 1-3 líneas (ej: "0-3.5m: arena limosa; 3.5-11m: grava arenosa densa"). ' +
           'numeroCalicatas: cuántas calicatas/sondajes/pozos se hicieron. profundidadInvestigada: hasta qué profundidad se investigó. ' +
           'licuacion/colapso/expansion: "No hay" / "Sí" / "" según el estudio. agresividad: nivel de sales/sulfatos al concreto. tipoCemento: tipo de cemento recomendado (ej "Tipo I", "Tipo V", "MS"). ' +
           'sistemaSostenimiento: el sostenimiento temporal recomendado para la excavación (calzaduras, muros anclados, calzaduras+muros, entibado). ' +
@@ -1910,8 +1910,8 @@ export class ChatService {
       take: 20,
     })
 
-    // Contexto de documentos persistidos del proyecto
-    const contextoDocumentos = await this.documentos.getContextoParaLlm(dto.proyectoId)
+    // Contexto de documentos persistidos del proyecto (RAG por relevancia a la consulta)
+    const contextoDocumentos = await this.documentos.getContextoRelevante(dto.proyectoId, dto.mensaje ?? '').catch(() => '')
     const imagenesProyecto = await this.documentos.getImagenesParaLlm(dto.proyectoId)
 
     // Construir el último mensaje del usuario — puede incluir archivo adjunto puntual
@@ -2078,7 +2078,7 @@ export class ChatService {
     }
 
     // El contexto del proyecto (documentos + estado) solo se inyecta cuando YA hay un proyecto elegido.
-    const contextoDocumentos = seleccionado ? await this.documentos.getContextoParaLlm(proyectoId).catch(() => '') : ''
+    const contextoDocumentos = seleccionado ? await this.documentos.getContextoRelevante(proyectoId, message ?? '').catch(() => '') : ''
     const estadoProyecto = seleccionado ? await this.resumenProyecto(proyectoId).catch(() => '') : ''
 
     // Sin proyecto elegido → el bot primero pregunta en cuál trabajar.

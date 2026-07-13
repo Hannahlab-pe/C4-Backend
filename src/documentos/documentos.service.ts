@@ -33,7 +33,7 @@ export class DocumentosService {
         let parsed
         try { parsed = await pdfParse(buffer) }
         catch { parsed = await pdfParse(buffer) } // pdf-parse falla en su 1ra llamada por proceso; reintenta
-        textoExtraido = parsed.text?.slice(0, 12000) ?? null
+        textoExtraido = parsed.text?.slice(0, 45000) ?? null
       } catch (err: any) {
         this.logger.error('Error extrayendo PDF:', err?.message)
       }
@@ -64,7 +64,7 @@ export class DocumentosService {
         const buffer = Buffer.from(params.base64, 'base64')
         let parsed
         try { parsed = await pdfParse(buffer) } catch { parsed = await pdfParse(buffer) }
-        textoExtraido = parsed.text?.slice(0, 12000) ?? null
+        textoExtraido = parsed.text?.slice(0, 45000) ?? null
       } catch { /* ignora */ }
     }
     const doc = this.repo.create({
@@ -136,6 +136,58 @@ export class DocumentosService {
     if (!partes.length) return ''
 
     return `\n\n---\n## DOCUMENTOS DEL PROYECTO\nEl ingeniero ha subido los siguientes documentos de referencia. Úsalos para responder con mayor precisión:\n\n${partes.join('\n\n---\n')}\n---`
+  }
+
+  private norm(s: string): string {
+    return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  }
+
+  /**
+   * RAG por relevancia (sin embeddings): recupera de los documentos del proyecto los
+   * FRAGMENTOS más relevantes a la consulta del usuario, con su fuente citada.
+   * Así la IA responde sobre el EMS/planos citando de qué documento sacó cada dato.
+   */
+  async getContextoRelevante(proyectoId: string, query: string): Promise<string> {
+    const docs = await this.repo.find({ where: { proyectoId }, order: { createdAt: 'ASC' } })
+    const conTexto = docs.filter((d) => d.textoExtraido && d.textoExtraido.trim())
+    if (!conTexto.length) return ''
+
+    const STOP = new Set(['de', 'la', 'el', 'los', 'las', 'en', 'y', 'a', 'del', 'que', 'un', 'una', 'por', 'para', 'con', 'se', 'su', 'al', 'lo', 'como', 'mas', 'sobre', 'este', 'esta', 'cual', 'cuanto', 'donde', 'the', 'of'])
+    const terms = [...new Set(this.norm(query || '').replace(/[^a-z0-9ñ ]/g, ' ').split(/\s+/).filter((w) => w.length >= 4 && !STOP.has(w)))]
+
+    // Sin términos útiles → lista de documentos disponibles (para que la IA sepa qué hay y cite)
+    if (terms.length === 0) {
+      const lista = conTexto.map((d) => `- ${d.nombre}`).join('\n')
+      return `\n\n---\n## DOCUMENTOS DEL PROYECTO\nEl usuario subió estos documentos. Cuando uses un dato de ellos, CITA SIEMPRE el nombre del documento.\n${lista}\n---`
+    }
+
+    // Chunk + score por coincidencia de términos
+    type Ch = { nombre: string; texto: string; score: number }
+    const chunks: Ch[] = []
+    const size = 1200, paso = 1000
+    for (const d of conTexto) {
+      const t = d.textoExtraido!
+      for (let i = 0; i < t.length; i += paso) {
+        const texto = t.slice(i, i + size)
+        const n = this.norm(texto)
+        let score = 0, distintos = 0
+        for (const term of terms) {
+          const c = n.split(term).length - 1
+          if (c > 0) { distintos++; score += 1 + Math.min(c, 3) * 0.3 }
+        }
+        if (score > 0) chunks.push({ nombre: d.nombre, texto: texto.trim(), score: score + distintos })
+        if (i + size >= t.length) break
+      }
+    }
+
+    if (!chunks.length) {
+      const lista = conTexto.map((d) => `- ${d.nombre}`).join('\n')
+      return `\n\n---\n## DOCUMENTOS DEL PROYECTO\nHay estos documentos subidos (ninguno coincide directamente con lo que se preguntó):\n${lista}\nSi te preguntan por su contenido, di qué documentos hay y pide precisar.\n---`
+    }
+
+    chunks.sort((a, b) => b.score - a.score)
+    const bloques = chunks.slice(0, 6).map((c) => `[Fuente: ${c.nombre}]\n${c.texto}`).join('\n\n---\n')
+    return `\n\n---\n## FRAGMENTOS RELEVANTES DE LOS DOCUMENTOS (recuperados por relevancia a la consulta)\nÚsalos para responder. CITA SIEMPRE el documento [entre corchetes] de donde sacaste cada dato (ej. "Según el EMS M5673…"). Si la respuesta no está en estos fragmentos ni en el resto del contexto, dilo con honestidad.\n\n${bloques}\n---`
   }
 
   async getImagenesParaLlm(proyectoId: string): Promise<{ mimeType: string; base64: string; nombre: string }[]> {
