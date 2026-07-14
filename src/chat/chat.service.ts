@@ -1627,7 +1627,9 @@ const C4_TOOLS: LlmTool[] = [
               properties: {
                 nombre: { type: 'string', description: 'Nombre completo. Obligatorio.' },
                 dni: { type: 'string', description: 'DNI. Opcional.' },
-                cargo: { type: 'string', description: 'Cargo o categoría: Capataz, Operario, Oficial, Peón, Operador, Ingeniero Residente, Maestro de obra, etc.' },
+                cargo: { type: 'string', description: 'Cargo o categoría: Capataz, Operario, Oficial, Peón, Operador de equipo, Ingeniero Residente, Maestro de obra, etc.' },
+                cuadrilla: { type: 'string', description: 'Cuadrilla a la que pertenece (ej. "Cuadrilla 1 – Estructuras", "Mov. de tierras"). Opcional.' },
+                equipo: { type: 'string', description: 'Equipo/máquina que opera (solo operadores: Retroexcavadora, Mezcladora, Vibrador…). Para los demás, "Herramienta manual". Opcional.' },
                 jornal: { type: 'number', description: 'Jornal por día (S/) o sueldo mensual. Opcional.' },
                 telefono: { type: 'string', description: 'Teléfono. Opcional.' },
                 fase: { type: 'string', description: 'Fase donde trabaja (demolicion|excavacion|construccion|acabados|administracion). Opcional.' },
@@ -2508,7 +2510,7 @@ export class ChatService {
         `   • cargar_presupuesto UNA VEZ POR FASE, con TODAS las partidas de esa fase, una por una, con metrado y PU EXACTOS (PU = M.O+MAT, o PARCIAL÷metrado). NO resumas, NO agrupes, NO redondees. Prefija el nombre con su capítulo para que se lea la secuencia: "Cimentación — Acero fy=4200", "Muros — Suministro Doppel", "Losas — Prelosas". La suma de lo cargado da el COSTO DIRECTO (no el total con IGV).\n` +
         `   • Clasifica por fase: obras provisionales + preliminares (caseta, trazo, EPP, grúa, transporte) → construccion (arranque de obra); concreto/cimentación/muros/losas/contrapiso → construccion; instalaciones eléctricas/sanitarias, sellado, tarrajeo/pisos/pintura → acabados. (Solo gestión pura —licencias, valorizaciones— va a administracion.)\n` +
         `   • Luego generar_cronograma (fecha inicio, jornada, frentes). El motor YA secuencia el casco por sub-fase (cimentación→muros→losas) y calcula la duración por metrado÷rendimiento; para las partidas grandes puedes pasar el rendimiento en "actividades" si lo sabes, si no usa uno referencial.\n` +
-        `6) SI el Excel trae una NÓMINA/PLANILLA de personal (hoja con nombres de trabajadores + DNI + cargo/categoría + jornal), MENCIÓNALO y OFRÉCELE cargar los trabajadores a la obra con agregar_trabajadores (TODOS, con nombre, DNI, cargo y jornal). Aparecen en el módulo Equipo → Personal de obra y se pueden asignar como responsables.\n` +
+        `6) SI el Excel trae una NÓMINA/PLANILLA de personal (hoja con nombres + DNI + cargo/categoría + cuadrilla + jornal), MENCIÓNALO y OFRÉCELE cargar los trabajadores con agregar_trabajadores (TODOS, con nombre, DNI, cargo, CUADRILLA, EQUIPO que opera si es operador, y jornal). Aparecen en el módulo Equipo → Personal de obra y se pueden asignar como responsables.\n` +
         `NO inventes partidas ni números: usa los reales del Excel.\n\n===== PRESUPUESTO (CSV) =====\n${csv}`
     }
 
@@ -3798,6 +3800,8 @@ export class ChatService {
           nombre: String(t.nombre).trim().slice(0, 120),
           dni: t.dni ? String(t.dni).trim().slice(0, 15) : undefined,
           cargo: t.cargo ? String(t.cargo).trim().slice(0, 60) : undefined,
+          cuadrilla: t.cuadrilla ? String(t.cuadrilla).trim().slice(0, 60) : undefined,
+          equipo: t.equipo ? String(t.equipo).trim().slice(0, 80) : undefined,
           jornal: t.jornal != null && !isNaN(Number(t.jornal)) ? Number(t.jornal) : undefined,
           telefono: t.telefono ? String(t.telefono).trim().slice(0, 20) : undefined,
           fase: t.fase ? String(t.fase).trim().toLowerCase().slice(0, 20) : undefined,
