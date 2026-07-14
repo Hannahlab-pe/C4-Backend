@@ -3375,14 +3375,25 @@ export class ChatService {
     const rendDefault = (unidad?: string, nombre?: string): number => {
       const u = String(unidad ?? '').toLowerCase()
       const n = norm(nombre ?? '')
-      if (/\bkg\b/.test(u) || /acero|fierro/.test(n)) return 275                 // kg/día
-      if (/sellad|junta|zocalo/.test(n)) return 25                              // sellado (antes que muro)
-      if (/encofrad/.test(n)) return 15                                          // m²/día
-      if (/m3/.test(u) || /concreto|vaciado|solado|excav/.test(n)) return 20     // m³/día
-      if (/losa|prelosa|contrapiso|piso|tarrajeo/.test(n)) return 40             // m²/día
-      if (/muro|doppel|placa|tabique/.test(n)) return 20                         // m²/día
-      if (/derrame/.test(n) || /\bml\b/.test(u)) return 25                        // ml/día
-      if (/m2/.test(u)) return 25
+      // Unidades DISCRETAS/GLOBALES (und, glb, día, jgo, pza): son un conteo, NO aplica metrado÷rendimiento
+      // (ej. 9200 ladrillos "und" no son 25/día). Van con duración por defecto. Va PRIMERO para no confundirse
+      // con keywords de m²/m³ (ej. "ladrillo" en unidad und).
+      if (/\bglb\b|\bund\b|\bdia\b|\bjgo\b|\bpza\b|\bp2\b/.test(u)) return 0
+      // Movimiento de tierras a MÁQUINA rinde muchísimo más que manual (el orden de estos if importa).
+      if (/maquinar|masiv|retroexcav|cargador|volquete/.test(n)) return 400       // m³/día (excavación a máquina)
+      if (/eliminac|acarreo|desmonte/.test(n)) return 300                         // m³/día (c/ volquetes)
+      if (/excav/.test(n)) return 10                                              // m³/día (excavación manual/localizada)
+      if (/\bkg\b/.test(u) || /acero|fierro/.test(n)) return 300                  // kg/día (cuadrilla)
+      if (/sellad|junta/.test(n)) return 30                                       // ml/m²/día
+      if (/encofrad/.test(n)) return 18                                           // m²/día
+      if (/pintura|empast|imprima/.test(n)) return 90                             // m²/día (cuadrilla)
+      if (/tarrajeo|revoque|enlucido/.test(n)) return 35                          // m²/día (cuadrilla)
+      if (/contrapiso|piso|ceramic|porcelan|laminad|enchape|zocalo/.test(n)) return 45  // m²/día
+      if (/muro|doppel|placa|tabique|ladrillo|albanil/.test(n)) return 25         // m²/día
+      if (/concreto|vaciado|solado/.test(n) || /m3/.test(u)) return 22            // m³/día (cuadrilla + mezcladora)
+      if (/derrame/.test(n) || /\bml\b/.test(u)) return 30                        // ml/día
+      if (/\bglb\b/.test(u) || /\bund\b/.test(u) || /\bdia\b/.test(u)) return 0   // partidas globales → duración por defecto
+      if (/m2/.test(u)) return 30
       return 0  // desconocido → cae al default de duración
     }
     // Orden de sub-fase constructiva para SECUENCIAR partidas del presupuesto (preliminares → cimentación →
@@ -3417,6 +3428,7 @@ export class ChatService {
           const k = etapaKeys.includes(r?.datos?.etapa) ? r.datos.etapa : (orden[0])
           grupos[k].push(r)
         }
+        let faseFin = new Date(cursor)
         for (const k of orden) {
           const propios = grupos[k] ?? []
           if (!propios.length) continue
@@ -3484,9 +3496,15 @@ export class ChatService {
             const end = this.addDias(etapaStart, it.dur)
             if (end > etapaEnd) etapaEnd = end
           }
-          cursor = new Date(etapaEnd)
-          if (cursor > finObra) finObra = cursor
+          // Las etapas se TRASLAPAN (distintos gremios avanzan por pisos en paralelo): la siguiente arranca
+          // cuando la actual va ~45%, no al terminar. Da un plazo realista en vez de sumar todo en serie.
+          const etapaDias = Math.max(1, Math.round((etapaEnd.getTime() - etapaStart.getTime()) / 86400000))
+          cursor = this.addDias(etapaStart, Math.max(2, Math.round(etapaDias * 0.45)))
+          if (etapaEnd > faseFin) faseFin = new Date(etapaEnd)
         }
+        // La siguiente FASE arranca cuando ésta TERMINA de verdad (fases en serie, etapas traslapadas dentro).
+        cursor = new Date(faseFin)
+        if (faseFin > finObra) finObra = new Date(faseFin)
       }
       if (!total) return { error: 'No hay actividades creadas en las fases todavía. Primero arma las etapas y actividades (crear_etapas / agregar_partidas / generar_proyecto), y luego genero el cronograma.' }
       // Línea base de presupuesto: para alertar si al editar el Gantt te pasas del costo previsto
