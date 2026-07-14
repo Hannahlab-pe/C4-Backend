@@ -1614,6 +1614,35 @@ const C4_TOOLS: LlmTool[] = [
   {
     type: 'function',
     function: {
+      name: 'agregar_trabajadores',
+      description: 'Agrega TRABAJADORES a la PLANILLA / PERSONAL DE OBRA del proyecto. Úsala cuando el usuario suba una NÓMINA/planilla de personal (ej. de un Excel con nombres, DNI, cargo, jornal) o pida agregar trabajadores/cuadrilla a la obra. Los trabajadores aparecen en el módulo Equipo → Personal de obra. Por defecto AÑADE a los existentes (no duplica por DNI/nombre). Carga TODOS los que estén en la nómina, uno por uno, con sus datos reales; NO inventes personas.',
+      parameters: {
+        type: 'object',
+        properties: {
+          trabajadores: {
+            type: 'array',
+            description: 'Lista de trabajadores a agregar a la planilla.',
+            items: {
+              type: 'object',
+              properties: {
+                nombre: { type: 'string', description: 'Nombre completo. Obligatorio.' },
+                dni: { type: 'string', description: 'DNI. Opcional.' },
+                cargo: { type: 'string', description: 'Cargo o categoría: Capataz, Operario, Oficial, Peón, Operador, Ingeniero Residente, Maestro de obra, etc.' },
+                jornal: { type: 'number', description: 'Jornal por día (S/) o sueldo mensual. Opcional.' },
+                telefono: { type: 'string', description: 'Teléfono. Opcional.' },
+                fase: { type: 'string', description: 'Fase donde trabaja (demolicion|excavacion|construccion|acabados|administracion). Opcional.' },
+              },
+              required: ['nombre'],
+            },
+          },
+        },
+        required: ['trabajadores'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'calcular_volumen_excavacion',
       description: 'Calcula el VOLUMEN DE EXCAVACIÓN. MODO RECOMENDADO POR DEFECTO = (B) BLOQUE SIMPLE: area_m2 (área TOTAL del terreno) × profundidad_m. ⚠️ PROFUNDIDAD: se mide desde la SUPERFICIE del terreno (nivel de vereda/terreno natural, normalmente N.P.T. ±0.00) hasta el fondo del sótano. Si el N.P.T. general más profundo del plano de cimentación es -21.40, la profundidad es ~21.4 m. NUNCA uses la diferencia entre dos niveles intermedios como profundidad (ej. -21.40 y -17.70 NO dan 3.7 m). Usa como fondo de la plataforma el N.P.T. GENERAL más profundo. MODO (A) POR SECTORES ("sectores"): ÚSALO SOLO si tienes las ÁREAS REALES de cada nivel (de un cuadro de metrados o dadas por el usuario). PROHIBIDO inventar las áreas partiendo el total en partes iguales o estimándolas a ojo del dibujo — eso da números FALSOS; si no tienes áreas reales por nivel, usa el modo SIMPLE con el área total. A la masiva SIEMPRE súmale (2) la SOBRE-EXCAVACIÓN de zapatas ("zapatas" con dimensiones REALES, o zapatas_pendientes:true si no las puedes dimensionar). Total en BANCO × 1.3 (esponjamiento Perú) = SUELTO + viajes de volquete. SACA los datos de los documentos (el área total está en el cuadro de áreas del plano de arquitectura/ubicación; los N.P.T./N.F.Z. en el de cimentación). FONDO ESCALONADO (proactivo): si ves VARIOS N.P.T. de PLATAFORMA distintos, el fondo NO es plano — avisa que el bloque único es solo un ESTIMADO y OFRECE el cálculo por sectores, pidiendo el área de cada plataforma. NO confundas los N.P.T. de PLATAFORMA (pocos, definen los sectores) con los N.F.Z. de ZAPATA (muchos, localizados y profundos → van en "zapatas", NO como sectores). NO inventes NINGÚN número. HONESTO: el desglose EXACTO por nivel (terreno irregular) requiere las áreas por plataforma (medidas en CAD o del metrado) — ofrécelo.',
       parameters: {
@@ -2330,6 +2359,7 @@ export class ChatService {
       `4) PRECIOS REFERENCIALES (para coordinar con el ingeniero): lista las partidas principales con metrado, PU referencial y el PORQUÉ de cada precio (del Excel = M.O+MAT o PARCIAL÷metrado; si falta o está en S/0 'Cliente', propón un PU de mercado limeño y JUSTIFÍCALO). Une precio con TIEMPO (rendimiento CAPECO + su porqué, duración = metrado÷rendimiento) e invítalo a AJUSTAR contigo lo que no cuadre.\n` +
       `5) Clasifica cada partida en su FASE de C4: obras provisionales + preliminares (caseta, trazo, EPP, grúa, transporte) → construccion (arranque); concreto/cimentación/muros/losas/contrapiso → construccion; instalaciones/sellado/tarrajeo/pisos/pintura → acabados; solo gestión pura → administracion.\n` +
       `6) OFRÉCELE (a) CARGAR las partidas (cargar_presupuesto, una vez por fase, TODAS exactas, sin resumir ni redondear; prefija el nombre con su capítulo: "Cimentación — …", "Muros — …", "Losas — …"; precio = PU = M.O+MAT o PARCIAL÷metrado) y (b) ARMAR EL CRONOGRAMA (el motor secuencia el casco por sub-fase y calcula duración por metrado÷rendimiento y costo por metrado×PU). Al confirmar, hazlo. NO inventes partidas; usa los números reales.\n` +
+      `7) Si trae NÓMINA de personal (nombres + DNI + cargo), OFRÉCELE cargar los trabajadores con agregar_trabajadores (van al módulo Equipo → Personal de obra).\n` +
       (texto ? `\nMensaje del usuario junto al Excel: "${texto}"\n` : '') +
       `\n===== PRESUPUESTO (CSV) =====\n${excelTexto.slice(0, 16000)}`
 
@@ -2478,6 +2508,7 @@ export class ChatService {
         `   • cargar_presupuesto UNA VEZ POR FASE, con TODAS las partidas de esa fase, una por una, con metrado y PU EXACTOS (PU = M.O+MAT, o PARCIAL÷metrado). NO resumas, NO agrupes, NO redondees. Prefija el nombre con su capítulo para que se lea la secuencia: "Cimentación — Acero fy=4200", "Muros — Suministro Doppel", "Losas — Prelosas". La suma de lo cargado da el COSTO DIRECTO (no el total con IGV).\n` +
         `   • Clasifica por fase: obras provisionales + preliminares (caseta, trazo, EPP, grúa, transporte) → construccion (arranque de obra); concreto/cimentación/muros/losas/contrapiso → construccion; instalaciones eléctricas/sanitarias, sellado, tarrajeo/pisos/pintura → acabados. (Solo gestión pura —licencias, valorizaciones— va a administracion.)\n` +
         `   • Luego generar_cronograma (fecha inicio, jornada, frentes). El motor YA secuencia el casco por sub-fase (cimentación→muros→losas) y calcula la duración por metrado÷rendimiento; para las partidas grandes puedes pasar el rendimiento en "actividades" si lo sabes, si no usa uno referencial.\n` +
+        `6) SI el Excel trae una NÓMINA/PLANILLA de personal (hoja con nombres de trabajadores + DNI + cargo/categoría + jornal), MENCIÓNALO y OFRÉCELE cargar los trabajadores a la obra con agregar_trabajadores (TODOS, con nombre, DNI, cargo y jornal). Aparecen en el módulo Equipo → Personal de obra y se pueden asignar como responsables.\n` +
         `NO inventes partidas ni números: usa los reales del Excel.\n\n===== PRESUPUESTO (CSV) =====\n${csv}`
     }
 
@@ -2584,6 +2615,7 @@ export class ChatService {
     if (name === 'crear_vaciados') return this.toolCrearVaciados(args, res, proyectoId)
     if (name === 'actualizar_actividades') return this.toolActualizarActividades(args, res, proyectoId)
     if (name === 'crear_productividad') return this.toolCrearProductividad(args, res, proyectoId)
+    if (name === 'agregar_trabajadores') return this.toolAgregarTrabajadores(args, res, proyectoId)
     if (name === 'buscar_partidas') return this.toolBuscarPartidas(args)
     if (name === 'agregar_partidas') return this.toolAgregarPartidas(args, res, proyectoId)
     if (name === 'consultar_checklist_seguridad') return this.toolConsultarChecklistSeguridad(args, proyectoId)
@@ -3745,6 +3777,43 @@ export class ChatService {
     } catch (err: any) {
       this.logger.error('Error agregando partidas:', err?.message)
       return { error: `Error agregando partidas: ${err?.message}` }
+    }
+  }
+
+  /** Agrega trabajadores a la PLANILLA / personal de obra del proyecto (fases-detalle 'personal_obra'). */
+  private async toolAgregarTrabajadores(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const entrada: any[] = (args.trabajadores ?? []).filter((t: any) => t?.nombre && String(t.nombre).trim())
+    if (!entrada.length) return { error: 'No hay trabajadores para agregar (falta al menos el nombre).' }
+    try {
+      const prev: any = (await this.fasesDetalle.obtener(proyectoId, 'personal_obra').catch(() => null))?.datos ?? {}
+      const lista: any[] = Array.isArray(prev.lista) ? prev.lista : []
+      const norm = (s: any) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim()
+      const existe = (t: any) => lista.some((x) =>
+        (t.dni && x.dni && String(x.dni) === String(t.dni)) || (!t.dni && norm(x.nombre) === norm(t.nombre)))
+      let agregados = 0
+      for (const t of entrada.slice(0, 300)) {
+        if (existe(t)) continue
+        lista.push({
+          id: Math.random().toString(36).slice(2, 10),
+          nombre: String(t.nombre).trim().slice(0, 120),
+          dni: t.dni ? String(t.dni).trim().slice(0, 15) : undefined,
+          cargo: t.cargo ? String(t.cargo).trim().slice(0, 60) : undefined,
+          jornal: t.jornal != null && !isNaN(Number(t.jornal)) ? Number(t.jornal) : undefined,
+          telefono: t.telefono ? String(t.telefono).trim().slice(0, 20) : undefined,
+          fase: t.fase ? String(t.fase).trim().toLowerCase().slice(0, 20) : undefined,
+        })
+        agregados++
+      }
+      await this.fasesDetalle.guardar(proyectoId, 'personal_obra', { ...prev, lista })
+      res.write(`event:personal_actualizado\ndata:${JSON.stringify({})}\n\n`)
+      this.logger.log(`Personal de obra ${proyectoId}: +${agregados} (total ${lista.length})`)
+      return {
+        ok: true, agregados, total: lista.length,
+        mensaje: `Agregué ${agregados} trabajador(es) a la planilla (total ${lista.length}). Aparecen en el módulo Equipo → Personal de obra. Confírmaselo al usuario con el número real.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error agregando trabajadores:', err?.message)
+      return { error: `Error agregando trabajadores: ${err?.message}` }
     }
   }
 
