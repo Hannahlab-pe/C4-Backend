@@ -146,7 +146,9 @@ export class LlmService {
     const body: Record<string, any> = {
       model: this.openaiModel,
       messages,
-      ...(esNuevo ? { max_completion_tokens: 4096 } : { temperature: 0.1, max_tokens: 4096 }),
+      // 16384 (máx de gpt-4o) para que quepan tool-calls grandes (ej. cargar_presupuesto con
+      // decenas de partidas o agregar_trabajadores con toda la nómina) sin truncar el JSON.
+      ...(esNuevo ? { max_completion_tokens: 16384 } : { temperature: 0.1, max_tokens: 16384 }),
     }
     if (tools.length > 0) {
       body.tools = tools
