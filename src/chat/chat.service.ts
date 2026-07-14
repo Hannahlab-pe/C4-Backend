@@ -1646,6 +1646,21 @@ const C4_TOOLS: LlmTool[] = [
   {
     type: 'function',
     function: {
+      name: 'cargar_obra_completa',
+      description: 'INSERTA TODA LA OBRA desde el Excel que el usuario ACABA de subir en este chat: parsea el archivo server-side y carga TODAS las partidas (organizadas en etapas por fase, con metrado y precio) y TODA la nómina de personal (nombre, DNI, cargo, cuadrilla, jornal). Es la forma FIABLE de "insertar/cargar todo": NO transcribes tú las partidas ni los trabajadores — el sistema lee el Excel completo (evita que se te queden partidas o gente afuera). Úsala cuando el usuario suba un Excel de obra/presupuesto y confirme que quiere cargar/insertar todo. Si le pasas fecha_inicio, además arma el cronograma. Solo funciona con el Excel recién subido en el chat.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fecha_inicio: { type: 'string', description: 'Fecha de inicio de obra YYYY-MM-DD. Si la das, además arma el cronograma. Opcional.' },
+          dias_semana: { type: 'number', description: 'Jornada: días trabajados por semana (default 6). Opcional.' },
+          frentes: { type: 'number', description: 'N° de frentes/cuadrillas en paralelo (default 1). Opcional.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'calcular_volumen_excavacion',
       description: 'Calcula el VOLUMEN DE EXCAVACIÓN. MODO RECOMENDADO POR DEFECTO = (B) BLOQUE SIMPLE: area_m2 (área TOTAL del terreno) × profundidad_m. ⚠️ PROFUNDIDAD: se mide desde la SUPERFICIE del terreno (nivel de vereda/terreno natural, normalmente N.P.T. ±0.00) hasta el fondo del sótano. Si el N.P.T. general más profundo del plano de cimentación es -21.40, la profundidad es ~21.4 m. NUNCA uses la diferencia entre dos niveles intermedios como profundidad (ej. -21.40 y -17.70 NO dan 3.7 m). Usa como fondo de la plataforma el N.P.T. GENERAL más profundo. MODO (A) POR SECTORES ("sectores"): ÚSALO SOLO si tienes las ÁREAS REALES de cada nivel (de un cuadro de metrados o dadas por el usuario). PROHIBIDO inventar las áreas partiendo el total en partes iguales o estimándolas a ojo del dibujo — eso da números FALSOS; si no tienes áreas reales por nivel, usa el modo SIMPLE con el área total. A la masiva SIEMPRE súmale (2) la SOBRE-EXCAVACIÓN de zapatas ("zapatas" con dimensiones REALES, o zapatas_pendientes:true si no las puedes dimensionar). Total en BANCO × 1.3 (esponjamiento Perú) = SUELTO + viajes de volquete. SACA los datos de los documentos (el área total está en el cuadro de áreas del plano de arquitectura/ubicación; los N.P.T./N.F.Z. en el de cimentación). FONDO ESCALONADO (proactivo): si ves VARIOS N.P.T. de PLATAFORMA distintos, el fondo NO es plano — avisa que el bloque único es solo un ESTIMADO y OFRECE el cálculo por sectores, pidiendo el área de cada plataforma. NO confundas los N.P.T. de PLATAFORMA (pocos, definen los sectores) con los N.F.Z. de ZAPATA (muchos, localizados y profundos → van en "zapatas", NO como sectores). NO inventes NINGÚN número. HONESTO: el desglose EXACTO por nivel (terreno irregular) requiere las áreas por plataforma (medidas en CAD o del metrado) — ofrécelo.',
       parameters: {
@@ -2503,18 +2518,15 @@ export class ChatService {
     if (/\.(xlsx|xls|csv)$/.test(nombre) || tipo.includes('sheet') || tipo.includes('excel')) {
       const csv = this.parseExcel(Buffer.from(dto.archivoBase64, 'base64')).slice(0, 16000)
       this.logger.log(`buildUserContent: EXCEL detectado, CSV parseado len=${csv.length}`)
+      if (dto.proyectoId && dto.archivoBase64) this.ultimoExcel.set(dto.proyectoId, dto.archivoBase64)
       if (!csv.trim()) return `${dto.mensaje}\n\n(No pude leer el Excel adjunto "${dto.archivoNombre ?? ''}".)`
       return `${dto.mensaje || 'Te paso el presupuesto.'}\n\n---\nEL EXCEL DEL PRESUPUESTO YA ESTÁ ABAJO (contenido en CSV, "${dto.archivoNombre ?? 'presupuesto.xlsx'}"). NO pidas adjuntarlo ni preguntes "¿qué hoja?" ni "¿qué análisis?": YA lo tienes, ANALÍZALO YA en este turno. Puede traer varias hojas — usa la de PARTIDAS (columnas METRADO/UNIDAD/PARCIAL, ej. "PRESUPUESTO"); las de ratios/precios son auxiliares. Eres el ingeniero experto: texto plano, sin markdown.\n` +
         `1) RESUMEN: nombre del proyecto, ubicación, N° de partidas y los capítulos (provisionales, concreto→cimentación/muros/losas, instalaciones…). MONTOS — distingue bien: el COSTO DIRECTO es la suma de las partidas; el TOTAL DE VENTA lleva encima Gastos Generales (%), Utilidad (%) e IGV (18%), que NO son partidas. Reporta ambos: costo directo ≈ S/X y total (con GG+utilidad+IGV) = S/Y (el "Total" del Excel). No los confundas ni fuerces que las partidas sumen el total con IGV.\n` +
         `2) RECOMENDACIONES honestas (2-4) como experto: ¿qué CUBRE y qué NO? Detecta faltantes y DILO — ej. "es solo el CASCO/obra gris: NO incluye acabados de arquitectura (pisos, pintura, aparatos, carpintería)"; "NO hay excavación ni movimiento de tierras"; partidas en S/0 marcadas 'Cliente' (las asume el cliente). Señala qué partidas pesan más.\n` +
         `3) PIDE lo que falte: si no hay excavación y podría haberla, o faltan acabados, PREGÚNTALE si quiere que las agregue tú (puedes crear esas partidas/etapas). No asumas: pregunta.\n` +
         `4) LISTA DE PRECIOS REFERENCIALES (CLAVE — es para coordinar con el ingeniero): arma una tabla de las partidas principales con METRADO, PRECIO UNITARIO referencial (S/) y, SIEMPRE, el PORQUÉ de ese precio. Si sale del Excel, dilo (PU = M.O+MAT, o PARCIAL÷metrado). Si una partida no tiene precio, está en S/0 'Cliente', o falta (excavación/acabados), PROPÓN un PU referencial de MERCADO LIMEÑO y JUSTIFÍCALO (composición aprox mano de obra + materiales + equipo, o rango de mercado). Une el precio con el TIEMPO: el rendimiento (CAPECO, con su porqué) y la duración = metrado÷rendimiento. Cierra invitándolo a REVISAR y AJUSTAR contigo los PU y rendimientos que no cuadren con su realidad — así coordinan tiempos, costos y partidas.\n` +
-        `5) OFRÉCELE cargar las partidas y armar el cronograma. Al confirmar:\n` +
-        `   • cargar_presupuesto UNA VEZ POR FASE, con TODAS las partidas de esa fase, una por una, con metrado y PU EXACTOS (PU = M.O+MAT, o PARCIAL÷metrado). NO resumas, NO agrupes, NO redondees. Prefija el nombre con su capítulo: "Cimentación — Acero fy=4200", "Muros — Suministro Doppel", "Losas — Prelosas" — ese prefijo AGRUPA las partidas en ETAPAS automáticamente dentro del módulo de la fase. La suma de lo cargado da el COSTO DIRECTO (no el total con IGV).\n` +
-        `   • Si el usuario pide "inserta/analiza TODO", haz el FLUJO COMPLETO: cargar_presupuesto por cada fase (con sus etapas) + agregar_trabajadores (la nómina) + generar_cronograma. Así toda la data queda en el sistema: partidas en sus etapas, personal en Equipo, y el Gantt.\n` +
-        `   • Clasifica por fase: obras provisionales + preliminares (caseta, trazo, EPP, grúa, transporte) → construccion (arranque de obra); concreto/cimentación/muros/losas/contrapiso → construccion; instalaciones eléctricas/sanitarias, sellado, tarrajeo/pisos/pintura → acabados. (Solo gestión pura —licencias, valorizaciones— va a administracion.)\n` +
-        `   • Luego generar_cronograma (fecha inicio, jornada, frentes). El motor YA secuencia el casco por sub-fase (cimentación→muros→losas) y calcula la duración por metrado÷rendimiento; para las partidas grandes puedes pasar el rendimiento en "actividades" si lo sabes, si no usa uno referencial.\n` +
-        `6) SI el Excel trae una NÓMINA/PLANILLA de personal (hoja con nombres + DNI + cargo/categoría + cuadrilla + jornal), MENCIÓNALO y OFRÉCELE cargar los trabajadores con agregar_trabajadores (TODOS, con nombre, DNI, cargo, CUADRILLA, EQUIPO que opera si es operador, y jornal). Aparecen en el módulo Equipo → Personal de obra y se pueden asignar como responsables.\n` +
+        `5) OFRÉCELE INSERTAR TODO en el sistema. Cuando el usuario confirme (dice "sí", "carga todo", "inserta todo"): llama a cargar_obra_completa — el sistema PARSEA el Excel entero y carga ÉL SOLO TODAS las partidas (organizadas en etapas por fase, con metrado y precio) Y toda la nómina de personal, sin que TÚ transcribas nada (así NO se queda ninguna partida ni trabajador afuera — es más fiable que copiarlas a mano). Si el usuario ya te dio la fecha de inicio, pásasela (fecha_inicio, dias_semana=6, frentes) y también arma el cronograma en la misma llamada. Reporta los números que te DEVUELVE la herramienta (partidas cargadas, costo directo, trabajadores, fin de obra) — no inventes.\n` +
+        `6) (SÓLO si cargar_obra_completa fallara, o el Excel no tuviera una hoja de partidas clara) recién ahí usa cargar_presupuesto (una vez por fase, TODAS las partidas exactas, prefijando el nombre con su capítulo "Cimentación — …") y agregar_trabajadores manualmente, y luego generar_cronograma. Clasificación de fases: provisionales/preliminares/concreto/muros/losas → construccion; movimiento de tierras → excavacion; instalaciones/tarrajeo/pisos/pintura/carpintería/ascensor → acabados.\n` +
         `NO inventes partidas ni números: usa los reales del Excel.\n\n===== PRESUPUESTO (CSV) =====\n${csv}`
     }
 
@@ -2621,6 +2633,7 @@ export class ChatService {
     if (name === 'crear_vaciados') return this.toolCrearVaciados(args, res, proyectoId)
     if (name === 'actualizar_actividades') return this.toolActualizarActividades(args, res, proyectoId)
     if (name === 'crear_productividad') return this.toolCrearProductividad(args, res, proyectoId)
+    if (name === 'cargar_obra_completa') return this.toolCargarObraCompleta(args, res, proyectoId)
     if (name === 'agregar_trabajadores') return this.toolAgregarTrabajadores(args, res, proyectoId)
     if (name === 'buscar_partidas') return this.toolBuscarPartidas(args)
     if (name === 'agregar_partidas') return this.toolAgregarPartidas(args, res, proyectoId)
@@ -3309,6 +3322,9 @@ export class ChatService {
     }
   }
 
+  // Último Excel subido por proyecto (base64), para que cargar_obra_completa lo parsee server-side.
+  private ultimoExcel = new Map<string, string>()
+
   // ── Cronograma de obra (Gantt de ejecución) ──
   private readonly FASES_CRONO = ['demolicion', 'excavacion', 'construccion', 'acabados', 'administracion']
   private parseFecha(s?: string): Date | null { const d = new Date(`${String(s ?? '').slice(0, 10)}T12:00:00`); return isNaN(d.getTime()) ? null : d }
@@ -3822,6 +3838,147 @@ export class ChatService {
     } catch (err: any) {
       this.logger.error('Error agregando trabajadores:', err?.message)
       return { error: `Error agregando trabajadores: ${err?.message}` }
+    }
+  }
+
+  /** Parsea server-side un Excel de obra y extrae TODAS las partidas (con fase+etapa) y los trabajadores. */
+  private extraerObraDeExcel(base64: string): { partidas: any[]; trabajadores: any[] } {
+    const norm = (s: any) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
+    const num = (v: any) => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
+    const faseDeCapitulo = (cap: string) => {
+      const n = norm(cap)
+      if (/demolic/.test(n)) return 'demolicion'
+      if (/movimiento de tierras|excavac/.test(n)) return 'excavacion'
+      if (/provision|preliminar|concreto|muro|tabique|albanil|estructura|ciment|acero|encofrad|obra gris|casco/.test(n)) return 'construccion'
+      return 'acabados'
+    }
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const XLSX = require('xlsx')
+    const wb = XLSX.read(Buffer.from(base64, 'base64'), { type: 'buffer' })
+    const aoaDe = (name: string): any[][] => XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, blankrows: false })
+
+    // ── Partidas del presupuesto ──
+    const partidas: any[] = []
+    const presuName = wb.SheetNames.find((n: string) => /presupuest|partida|metrad/i.test(n)) ?? wb.SheetNames[0]
+    if (presuName) {
+      const aoa = aoaDe(presuName)
+      let h = aoa.findIndex((r) => r.some((c) => /descrip/i.test(String(c))) && r.some((c) => /metrad/i.test(String(c))))
+      if (h < 0) h = 0
+      const head = (aoa[h] ?? []).map((c) => norm(c))
+      const col = (re: RegExp) => head.findIndex((c) => re.test(c))
+      const cDesc = col(/descrip/) >= 0 ? col(/descrip/) : 1
+      const cUnd = col(/unidad|und/) >= 0 ? col(/unidad|und/) : 2
+      const cMet = col(/metrad/) >= 0 ? col(/metrad/) : 3
+      const cPu = col(/^p\.?u\.?|precio unit/) >= 0 ? col(/^p\.?u\.?|precio unit/) : 7
+      const cParc = col(/parcial/) >= 0 ? col(/parcial/) : 8
+      let capitulo = '', fase = 'construccion'
+      for (let i = h + 1; i < aoa.length; i++) {
+        const r = aoa[i] ?? []
+        const item = String(r[0] ?? '').trim()
+        const desc = String(r[cDesc] ?? '').trim()
+        if (!desc || /^(subtotal|costo directo|gastos generales|utilidad|igv|total)/i.test(desc)) continue
+        const met = num(r[cMet])
+        if (/^\d{1,2}$/.test(item) && !met) { capitulo = desc; fase = faseDeCapitulo(desc); continue }
+        const pu = num(r[cPu]) || (met ? num(r[cParc]) / met : 0)
+        if (met > 0 && pu > 0 && desc.length > 3) {
+          const etapa = capitulo ? capitulo.charAt(0).toUpperCase() + capitulo.slice(1).toLowerCase() : 'General'
+          partidas.push({ fase, etapa, nombre: desc.slice(0, 200), unidad: String(r[cUnd] ?? '').trim().slice(0, 20), metrado: met, pu: Math.round(pu * 100) / 100 })
+        }
+      }
+    }
+
+    // ── Trabajadores de la nómina ──
+    const trabajadores: any[] = []
+    const nomName = wb.SheetNames.find((n: string) => /mano de obra|personal|n[oó]mina|planilla|trabajador/i.test(n))
+    if (nomName) {
+      const aoa = aoaDe(nomName)
+      const h = aoa.findIndex((r) => r.some((c) => /nombre/i.test(String(c))) && r.some((c) => /dni|cargo|categor/i.test(String(c))))
+      if (h >= 0) {
+        const head = aoa[h].map((c) => norm(c))
+        const col = (re: RegExp) => head.findIndex((c) => re.test(c))
+        const cNom = col(/nombre/), cDni = col(/dni/), cCargo = col(/categor|cargo/), cCuad = col(/cuadrilla/), cEq = col(/equipo/), cJor = col(/jornal|sueldo/), cTel = col(/tel[eé]fono/)
+        for (let i = h + 1; i < aoa.length; i++) {
+          const r = aoa[i] ?? []
+          if (typeof r[0] !== 'number') continue
+          const nombre = String(r[cNom] ?? '').trim()
+          if (nombre.length < 3) continue
+          trabajadores.push({
+            nombre, dni: cDni >= 0 ? String(r[cDni] ?? '').trim() || undefined : undefined, cargo: cCargo >= 0 ? String(r[cCargo] ?? '').trim() || undefined : undefined,
+            cuadrilla: cCuad >= 0 ? String(r[cCuad] ?? '').trim() || undefined : undefined, equipo: cEq >= 0 ? String(r[cEq] ?? '').trim() || undefined : undefined,
+            jornal: cJor >= 0 ? num(r[cJor]) || undefined : undefined, telefono: cTel >= 0 ? String(r[cTel] ?? '').trim() || undefined : undefined,
+          })
+        }
+      }
+    }
+    return { partidas, trabajadores }
+  }
+
+  /** Parsea el Excel subido y carga TODA la obra: partidas en etapas por fase + nómina (+ cronograma si hay fecha). */
+  private async toolCargarObraCompleta(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const base64 = this.ultimoExcel.get(proyectoId)
+    if (!base64) return { error: 'No tengo el Excel en memoria. Pídele al usuario que vuelva a adjuntar el Excel del presupuesto en este chat y confirme la carga.' }
+    let obra: { partidas: any[]; trabajadores: any[] }
+    try { obra = this.extraerObraDeExcel(base64) } catch (e: any) { return { error: `No pude leer el Excel: ${e?.message}` } }
+    const { partidas, trabajadores } = obra
+    if (!partidas.length && !trabajadores.length) return { error: 'No encontré partidas ni nómina en el Excel. ¿Es el archivo correcto (con hoja PRESUPUESTO)?' }
+
+    const INIT_ESTADO: Record<string, string> = { demolicion: 'Planificada', excavacion: 'Planificada', construccion: 'Programado', acabados: 'En acabados', administracion: 'Por iniciar' }
+    const slug = (s: string) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30) || 'general'
+    const resumenFases: string[] = []
+    let totalPartidas = 0, montoTotal = 0
+    try {
+      for (const fase of [...new Set(partidas.map((p) => p.fase))]) {
+        const props = partidas.filter((p) => p.fase === fase)
+        res.write(`event:status\ndata:${JSON.stringify({ step: `Cargando ${props.length} partidas en ${fase}...`, icon: 'check' })}\n\n`)
+        const existentes: any[] = await this.registrosFase.listar(proyectoId, fase).catch(() => [])
+        const yaNombres = new Set(existentes.filter((r) => r?.datos?.origen === 'presupuesto').map((r) => String(r.nombre).toLowerCase().trim()))
+        const prevDet: any = await this.fasesDetalle.obtener(proyectoId, `${fase}__etapas`).catch(() => null)
+        const etapas: any[] = Array.isArray(prevDet?.datos?.etapas) ? [...prevDet.datos.etapas] : []
+        let n = 0
+        for (const p of props) {
+          if (yaNombres.has(p.nombre.toLowerCase().trim())) continue
+          const etapaKey = slug(p.etapa)
+          if (!etapas.some((e) => e.key === etapaKey)) etapas.push({ key: etapaKey, nombre: String(p.etapa).slice(0, 60), descripcion: 'Partidas del presupuesto' })
+          await this.registrosFase.crear(proyectoId, fase, {
+            nombre: p.nombre, estado: INIT_ESTADO[fase] ?? 'Programado',
+            datos: { unidad: p.unidad || undefined, cantidad: p.metrado, precioUnitario: p.pu, etapa: etapaKey, origen: 'presupuesto' },
+          })
+          n++; totalPartidas++; montoTotal += p.metrado * p.pu
+        }
+        if (etapas.length) await this.fasesDetalle.guardar(proyectoId, `${fase}__etapas`, { ...(prevDet?.datos ?? {}), etapas })
+        res.write(`event:etapas_creadas\ndata:${JSON.stringify({ fase })}\n\n`)
+        resumenFases.push(`${fase}: ${n} partidas en ${etapas.length} etapas`)
+      }
+
+      let trabAgregados = 0
+      if (trabajadores.length) {
+        res.write(`event:status\ndata:${JSON.stringify({ step: `Cargando ${trabajadores.length} trabajadores en la planilla...`, icon: 'check' })}\n\n`)
+        const prevP: any = (await this.fasesDetalle.obtener(proyectoId, 'personal_obra').catch(() => null))?.datos ?? {}
+        const lista: any[] = Array.isArray(prevP.lista) ? prevP.lista : []
+        const nrm = (s: any) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim()
+        for (const t of trabajadores) {
+          if (lista.some((x) => (t.dni && x.dni && String(x.dni) === String(t.dni)) || (!t.dni && nrm(x.nombre) === nrm(t.nombre)))) continue
+          lista.push({ id: Math.random().toString(36).slice(2, 10), nombre: String(t.nombre).slice(0, 120), dni: t.dni, cargo: t.cargo, cuadrilla: t.cuadrilla, equipo: t.equipo, jornal: t.jornal, telefono: t.telefono })
+          trabAgregados++
+        }
+        await this.fasesDetalle.guardar(proyectoId, 'personal_obra', { ...prevP, lista })
+        res.write(`event:personal_actualizado\ndata:${JSON.stringify({})}\n\n`)
+      }
+
+      const fmtS = (n: number) => `S/ ${Math.round(n).toLocaleString('es-PE')}`
+      this.logger.log(`cargar_obra_completa ${proyectoId}: ${totalPartidas} partidas, ${trabAgregados} trabajadores, ${fmtS(montoTotal)}`)
+
+      let crono: any = null
+      if (args.fecha_inicio) crono = await this.toolGenerarCronograma({ fecha_inicio: args.fecha_inicio, dias_semana: args.dias_semana, frentes: args.frentes }, res, proyectoId).catch(() => null)
+
+      return {
+        ok: true, partidas_cargadas: totalPartidas, costo_directo: Math.round(montoTotal), trabajadores: trabAgregados, fases: resumenFases,
+        cronograma: crono?.ok ? { fin: crono.fin_obra, dias: crono.duracion_dias } : undefined,
+        mensaje: `Cargué del Excel TODA la obra: ${totalPartidas} partidas (costo directo ${fmtS(montoTotal)}) organizadas en etapas por fase (${resumenFases.join('; ')}), y ${trabAgregados} trabajador(es) en la planilla.${crono?.ok ? ` Armé el cronograma: fin estimado ${crono.fin_obra} (~${crono.duracion_dias} días).` : ' Falta el cronograma: ofrécele armarlo con generar_cronograma dándome la fecha de inicio.'} Repórtale los números REALES y dile que revise "Etapas de obra" por fase, "Personal de obra" en Equipo y el Cronograma.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error en cargar_obra_completa:', err?.message)
+      return { error: `Error cargando la obra: ${err?.message}` }
     }
   }
 
