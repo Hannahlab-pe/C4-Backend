@@ -226,6 +226,7 @@ MODO J3 — CRONOGRAMA DE OBRA (Gantt profesional, por rendimientos)
 - REGLA CRÍTICA — ACTÚA AL CONFIRMAR: si el usuario ya dijo "sí", "genera", "créalo", "procede" o equivalente, y los datos están en la conversación, LLAMA generar_cronograma DE INMEDIATO en ESE turno. PROHIBIDO volver a pedir datos, volver a proponer, o pedir otra confirmación. Una segunda ronda de preguntas tras un "sí" es inaceptable.
 - El PROYECTO YA EXISTE (estás dentro de un proyecto). NUNCA uses generar_proyecto ni pidas "nombre del proyecto" para el cronograma. Para el cronograma solo se usa generar_cronograma.
 - Con los datos, propón los rendimientos de las partidas principales (tabla de abajo) en el MISMO mensaje en que generas o justo antes, y llama generar_cronograma pasándole "actividades" con {nombre, fase, metrado, unidad, rendimiento_diario, precio_unitario} para las partidas grandes (el metrado y el precio unitario sácalos del metrado/presupuesto ya cargado, o propón un PU referencial de mercado limeño que el usuario confirme; NO inventes metrados). La herramienta calcula la duración por metrado÷rendimiento Y el costo por metrado×PU. Explica el fundamento (ej. "excavación 7,200 m³ ÷ 400 m³/día ÷ 2 frentes = 9 días útiles; costo 7,200 × S/12 = S/86,400"). Así el cronograma queda LIGADO al presupuesto: cada actividad tiene su costo, y el usuario controla plazo Y plata.
+- PARTIDAS DE UN PRESUPUESTO CARGADO (cargar_presupuesto): el motor YA hace lo pesado — secuencia el casco por sub-fase (preliminares→cimentación→muros→losas→otros→instalaciones→sellado, en paralelo dentro de cada sub-fase) y le pone a cada partida un RENDIMIENTO referencial por su unidad/tipo si no le das uno. Por eso NO necesitas pasar "orden" partida por partida ni el rendimiento de las 27; basta con que el NOMBRE de cada partida lleve su capítulo ("Cimentación — …", "Muros — …", "Losas — …") y que estén en la fase correcta. Solo pasa rendimiento en "actividades" para las 2-3 partidas grandes si quieres afinar el plazo. NO metas todo en una sola actividad ni resumas.
 - RENDIMIENTOS referenciales CAPECO (Perú, por cuadrilla-día — el usuario los ajusta): excavación masiva a máquina ~350-500 m³/día; excavación manual ~4 m³/día·cuadrilla; eliminación de desmonte ~200-300 m³/día; calzaduras ~2 paños/día; muros anclados ~20-30 m²/día o 1-2 anclajes/día; demolición estructural ~25-40 m³/día; concreto (vaciado) ~15-25 m³/día; encofrado ~12-18 m²/día; acero (habilitado+armado) ~250-300 kg/día; albañilería (muro) ~10 m²/día·operario; tarrajeo ~14 m²/día·operario; contrapiso/piso ~40 m²/día; instalaciones ~variable (pregunta). Son referenciales — SIEMPRE dile que los confirme.
 - Cuando pregunten "¿qué está atrasado?", "¿cómo va el cronograma?", "¿qué viene esta semana?" o "¿cuándo termina la obra?", usa consultar_cronograma: reporta las ATRASADAS primero (fecha de fin + avance), luego lo de esta semana (look-ahead), el avance global y la fecha de fin. Si hay atrasos, sugiere reprogramar o reforzar cuadrilla/frentes.
 - Para cambiar fecha/avance de UNA actividad puntual, usa actualizar_actividades (o dile que la edite con un click en la pestaña Cronograma).
@@ -2324,10 +2325,10 @@ export class ChatService {
     const promptExcel =
       `El usuario (un ingeniero de obra) subió un PRESUPUESTO / METRADOS en Excel ("${media?.excelName || 'presupuesto'}"). SU CONTENIDO YA ESTÁ ABAJO en CSV. NO pidas que lo adjunten, ni "¿qué hoja?", ni "¿qué tipo de análisis?": YA lo tienes, ANALÍZALO YA. Puede traer varias hojas — usa la que tiene las PARTIDAS (columnas METRADO/UNIDAD/PARCIAL); ignora hojas de ratios/precios auxiliares. Eres el ingeniero asistente experto: texto plano, sin ** ni markdown, claro y útil.\n` +
       `1) LÉELO como un presupuesto de obra: nombre del proyecto, ubicación, y las PARTIDAS reales con su metrado — descripción, unidad, cantidad (columna METRADO), y precio unitario. OJO: el PU suele ser la suma de M.O + MAT, y el PARCIAL = metrado × PU (si solo hay PARCIAL y metrado, el PU = PARCIAL ÷ metrado). Ignora las filas de capítulos/títulos (ej. "3.0 CONCRETO ARMADO"), subtotales y totales.\n` +
-      `2) Dale un RESUMEN claro: proyecto, monto TOTAL (S/), N° de partidas, y los CAPÍTULOS/estructura que ves (ej. obras provisionales, concreto armado→cimentación/muros/losas, etc.).\n` +
-      `3) Dale 1-3 RECOMENDACIONES como experto: ¿qué cubre y qué NO? (ej. "este presupuesto es solo del CASCO/obra gris; no incluye excavación ni acabados", "las partidas de muros prefabricados dominan el costo"). Sé honesto sobre lo que falta.\n` +
-      `4) Clasifica cada partida en su FASE de C4: demolicion | excavacion | construccion | acabados | administracion (obras provisionales/preliminares → administracion; casco/concreto/muros/losas → construccion; tarrajeo/pisos/pintura → acabados).\n` +
-      `5) OFRÉCELE dos cosas: (a) CARGAR las partidas a la obra (cargar_presupuesto, una vez por fase, con nombre/unidad/cantidad/precio — el precio es el PU), y (b) ARMAR EL CRONOGRAMA con esas partidas (metrado÷rendimiento para el tiempo, metrado×PU para el costo). Cuando confirme, hazlo. NO inventes partidas que no estén en la tabla; reporta los números reales.\n` +
+      `2) RESUMEN: proyecto, ubicación, N° de partidas y capítulos. MONTOS — distingue COSTO DIRECTO (suma de partidas) del TOTAL DE VENTA (lleva encima Gastos Generales %, Utilidad % e IGV 18%, que NO son partidas). Reporta ambos; no fuerces que las partidas sumen el total con IGV.\n` +
+      `3) RECOMENDACIONES honestas: ¿qué cubre y qué NO? (ej. "solo CASCO/obra gris; no incluye acabados", "no hay excavación", partidas en S/0 'Cliente"). Si falta excavación o acabados y podría haberlos, PREGÚNTALE si quiere que los agregue. Señala qué partidas pesan más.\n` +
+      `4) Clasifica cada partida en su FASE de C4: obras provisionales + preliminares (caseta, trazo, EPP, grúa, transporte) → construccion (arranque); concreto/cimentación/muros/losas/contrapiso → construccion; instalaciones/sellado/tarrajeo/pisos/pintura → acabados; solo gestión pura → administracion.\n` +
+      `5) OFRÉCELE (a) CARGAR las partidas (cargar_presupuesto, una vez por fase, TODAS exactas, sin resumir ni redondear; prefija el nombre con su capítulo: "Cimentación — …", "Muros — …", "Losas — …"; precio = PU = M.O+MAT o PARCIAL÷metrado) y (b) ARMAR EL CRONOGRAMA (el motor secuencia el casco por sub-fase y calcula duración por metrado÷rendimiento y costo por metrado×PU). Al confirmar, hazlo. NO inventes partidas; usa los números reales.\n` +
       (texto ? `\nMensaje del usuario junto al Excel: "${texto}"\n` : '') +
       `\n===== PRESUPUESTO (CSV) =====\n${excelTexto.slice(0, 16000)}`
 
@@ -2467,7 +2468,15 @@ export class ChatService {
       const csv = this.parseExcel(Buffer.from(dto.archivoBase64, 'base64')).slice(0, 16000)
       this.logger.log(`buildUserContent: EXCEL detectado, CSV parseado len=${csv.length}`)
       if (!csv.trim()) return `${dto.mensaje}\n\n(No pude leer el Excel adjunto "${dto.archivoNombre ?? ''}".)`
-      return `${dto.mensaje || 'Te paso el presupuesto.'}\n\n---\nEL EXCEL DEL PRESUPUESTO YA ESTÁ ABAJO (su contenido en CSV, "${dto.archivoNombre ?? 'presupuesto.xlsx'}"). NO pidas que lo adjunten ni preguntes "¿qué hoja?" ni "¿qué tipo de análisis?": YA lo tienes, ANALÍZALO DE INMEDIATO en este turno. Puede traer VARIAS hojas — usa la que tiene las PARTIDAS (columnas tipo METRADO / UNIDAD / PARCIAL, ej. la hoja "PRESUPUESTO"); ignora hojas auxiliares de ratios o precios. Eres el ingeniero experto, texto plano sin markdown: (1) RESUMEN: nombre del proyecto, ubicación, monto TOTAL en S/, N° de partidas, y los capítulos que ves. (2) 1-3 RECOMENDACIONES honestas (qué cubre y qué NO, ej. "es solo el casco/obra gris — no incluye excavación ni acabados"; qué partidas pesan más). (3) OFRÉCELE cargar las partidas (cargar_presupuesto, una vez por fase; precio = PU = M.O+MAT o PARCIAL÷metrado) y armar el cronograma. Al cargar: TODAS las partidas de la tabla, una por una, con metrado y PU EXACTOS — NO las resumas ni redondees; el total cargado debe COINCIDIR con el total del Excel. Clasifica por fase (provisionales/preliminares→administracion; concreto/muros/losas/casco→construccion; tarrajeo/pisos/pintura/instalaciones→acabados). En construcción, las partidas del casco van EN SECUENCIA (cimentación → muros → losas): pásale a generar_cronograma el parámetro "orden" para que no salgan todas en paralelo. NO inventes partidas; reporta números reales.\n\n===== PRESUPUESTO (CSV) =====\n${csv}`
+      return `${dto.mensaje || 'Te paso el presupuesto.'}\n\n---\nEL EXCEL DEL PRESUPUESTO YA ESTÁ ABAJO (contenido en CSV, "${dto.archivoNombre ?? 'presupuesto.xlsx'}"). NO pidas adjuntarlo ni preguntes "¿qué hoja?" ni "¿qué análisis?": YA lo tienes, ANALÍZALO YA en este turno. Puede traer varias hojas — usa la de PARTIDAS (columnas METRADO/UNIDAD/PARCIAL, ej. "PRESUPUESTO"); las de ratios/precios son auxiliares. Eres el ingeniero experto: texto plano, sin markdown.\n` +
+        `1) RESUMEN: nombre del proyecto, ubicación, N° de partidas y los capítulos (provisionales, concreto→cimentación/muros/losas, instalaciones…). MONTOS — distingue bien: el COSTO DIRECTO es la suma de las partidas; el TOTAL DE VENTA lleva encima Gastos Generales (%), Utilidad (%) e IGV (18%), que NO son partidas. Reporta ambos: costo directo ≈ S/X y total (con GG+utilidad+IGV) = S/Y (el "Total" del Excel). No los confundas ni fuerces que las partidas sumen el total con IGV.\n` +
+        `2) RECOMENDACIONES honestas (2-4) como experto: ¿qué CUBRE y qué NO? Detecta faltantes y DILO — ej. "es solo el CASCO/obra gris: NO incluye acabados de arquitectura (pisos, pintura, aparatos, carpintería)"; "NO hay excavación ni movimiento de tierras"; partidas en S/0 marcadas 'Cliente' (las asume el cliente). Señala qué partidas pesan más.\n` +
+        `3) PIDE lo que falte: si no hay excavación y podría haberla, o faltan acabados, PREGÚNTALE si quiere que las agregue tú (puedes crear esas partidas/etapas). No asumas: pregunta.\n` +
+        `4) OFRÉCELE cargar las partidas y armar el cronograma. Al confirmar:\n` +
+        `   • cargar_presupuesto UNA VEZ POR FASE, con TODAS las partidas de esa fase, una por una, con metrado y PU EXACTOS (PU = M.O+MAT, o PARCIAL÷metrado). NO resumas, NO agrupes, NO redondees. Prefija el nombre con su capítulo para que se lea la secuencia: "Cimentación — Acero fy=4200", "Muros — Suministro Doppel", "Losas — Prelosas". La suma de lo cargado da el COSTO DIRECTO (no el total con IGV).\n` +
+        `   • Clasifica por fase: obras provisionales + preliminares (caseta, trazo, EPP, grúa, transporte) → construccion (arranque de obra); concreto/cimentación/muros/losas/contrapiso → construccion; instalaciones eléctricas/sanitarias, sellado, tarrajeo/pisos/pintura → acabados. (Solo gestión pura —licencias, valorizaciones— va a administracion.)\n` +
+        `   • Luego generar_cronograma (fecha inicio, jornada, frentes). El motor YA secuencia el casco por sub-fase (cimentación→muros→losas) y calcula la duración por metrado÷rendimiento; para las partidas grandes puedes pasar el rendimiento en "actividades" si lo sabes, si no usa uno referencial.\n` +
+        `NO inventes partidas ni números: usa los reales del Excel.\n\n===== PRESUPUESTO (CSV) =====\n${csv}`
     }
 
     return dto.mensaje
@@ -3305,6 +3314,36 @@ export class ChatService {
       const parcial = cands.find((o) => o.nombreNorm && (n.includes(o.nombreNorm) || o.nombreNorm.includes(n)))
       return parcial?.ov ?? null
     }
+    // Rendimiento por defecto (CAPECO aprox, Perú) para partidas del presupuesto SIN rendimiento explícito,
+    // según unidad/keyword. Da duraciones variadas y realistas en vez de un plano de 4 días.
+    const rendDefault = (unidad?: string, nombre?: string): number => {
+      const u = String(unidad ?? '').toLowerCase()
+      const n = norm(nombre ?? '')
+      if (/\bkg\b/.test(u) || /acero|fierro/.test(n)) return 275                 // kg/día
+      if (/sellad|junta|zocalo/.test(n)) return 25                              // sellado (antes que muro)
+      if (/encofrad/.test(n)) return 15                                          // m²/día
+      if (/m3/.test(u) || /concreto|vaciado|solado|excav/.test(n)) return 20     // m³/día
+      if (/losa|prelosa|contrapiso|piso|tarrajeo/.test(n)) return 40             // m²/día
+      if (/muro|doppel|placa|tabique/.test(n)) return 20                         // m²/día
+      if (/derrame/.test(n) || /\bml\b/.test(u)) return 25                        // ml/día
+      if (/m2/.test(u)) return 25
+      return 0  // desconocido → cae al default de duración
+    }
+    // Orden de sub-fase constructiva para SECUENCIAR partidas del presupuesto (preliminares → cimentación →
+    // muros → losas → otros → instalaciones → sellado). Dentro de cada sub-fase corren en PARALELO.
+    const subfaseOrden = (nombre: string): number => {
+      const n = norm(nombre)
+      // Los ACABADOS/INSTALACIONES se detectan ANTES que la estructura: "Sellado de juntas en muros"
+      // es acabado (7), no muros (3). El orden de estos if importa.
+      if (/provision|caseta|preliminar|epp|proteccion|seguridad|trazo|replanteo|nivel|transporte|gru|limpieza|movil/.test(n)) return 1
+      if (/sellad|junta|tarrajeo|pintura|enchape|acabado|carpinteria|vidrio|zocalo/.test(n)) return 7
+      if (/instalac|electric|sanitar|agua|desague|tablero|tomacorriente|alumbrado|\bgas\b/.test(n)) return 6
+      if (/ciment|zapata|solado|perfilad|platea|falso piso|calzad|excav/.test(n)) return 2
+      if (/muro|doppel|columna|placa|vertical|anclaje|entrepiso/.test(n)) return 3
+      if (/losa|prelosa|aligerad|techo|escalera/.test(n)) return 4
+      if (/derrame|contrapiso|vereda|otros/.test(n)) return 5
+      return 4
+    }
 
     let cursor = new Date(inicio)
     let finObra = new Date(inicio)
@@ -3330,20 +3369,23 @@ export class ChatService {
           // actividad (ej. del presupuesto: datos.cantidad = metrado, datos.precioUnitario = PU).
           const items = propios.map((r) => {
             const ov = buscarOv(fase, r.nombre) ?? {}
+            const esPresup = r?.datos?.origen === 'presupuesto'
             const metrado = num(ov.metrado) || num(r?.datos?.cantidad) || 0
             const pu = num(ov.pu) || num(r?.datos?.precioUnitario) || 0
-            const rend = num(ov.rendimiento)
+            // Rendimiento: el que dio la IA; si no y es partida del presupuesto con metrado, uno por defecto.
+            let rend = num(ov.rendimiento)
+            if (!rend && metrado && esPresup) rend = rendDefault(ov.unidad || r?.datos?.unidad, r.nombre)
             const fr = num(ov.frentes) || frentesG
             let dur: number, fundamento: any = undefined
             if (metrado && rend) {
               const util = Math.max(1, Math.ceil(metrado / (rend * fr)))
               dur = utilACalendario(util)
-              fundamento = { metrado, unidad: ov.unidad || r?.datos?.unidad, rendimiento_diario: rend, frentes: fr, dias_utiles: util }
+              fundamento = { metrado, unidad: ov.unidad || r?.datos?.unidad, rendimiento_diario: rend, frentes: fr, dias_utiles: util, estimado: !num(ov.rendimiento) || undefined }
             } else {
               dur = num(ov.duracionDias) || num(r?.datos?.duracionDias) || diasAct
             }
             const costo = metrado && pu ? Math.round(metrado * pu) : (num(r?.datos?.costoPresupuestado) || 0)
-            return { r, dur, fundamento, costo, pu: pu || undefined, orden: ov.orden }
+            return { r, dur, fundamento, costo, pu: pu || undefined, orden: ov.orden, esPresup }
           })
           const guardar = async (it: typeof items[number], inicioAct: Date) => {
             const datos: any = { ...(it.r?.datos ?? {}), fechaInicio: this.fechaISO(inicioAct), duracionDias: it.dur }
@@ -3352,15 +3394,34 @@ export class ChatService {
             await this.registrosFase.actualizar(it.r.id, { datos }).catch(() => {})
             total++
           }
-          // Separar SECUENCIALES (con "orden", ej. anillos) de PARALELAS (mismo inicio)
+          // (1) SECUENCIALES explícitas (con "orden", ej. anillos de excavación): back-to-back.
           const seq = items.filter((it) => it.orden != null).sort((a, b) => (a.orden! - b.orden!))
-          const par = items.filter((it) => it.orden == null)
+          // (2) Partidas del PRESUPUESTO sin "orden": se secuencian por SUB-FASE (cimentación → muros →
+          //     losas → …), en paralelo dentro de cada sub-fase. Así el plazo es realista, no todo el mismo día.
+          const presup = items.filter((it) => it.orden == null && it.esPresup)
+          // (3) El resto: en paralelo desde el inicio de la etapa (comportamiento clásico).
+          const par = items.filter((it) => it.orden == null && !it.esPresup)
           let etapaEnd = new Date(etapaStart)
           let seqCursor = new Date(etapaStart)
           for (const it of seq) {
             await guardar(it, seqCursor)
             seqCursor = this.addDias(seqCursor, it.dur)
             if (seqCursor > etapaEnd) etapaEnd = new Date(seqCursor)
+          }
+          if (presup.length) {
+            const subKeys = [...new Set(presup.map((it) => subfaseOrden(it.r.nombre)))].sort((a, b) => a - b)
+            let subCursor = new Date(etapaStart)
+            for (const sk of subKeys) {
+              const sub = presup.filter((it) => subfaseOrden(it.r.nombre) === sk)
+              let subEnd = new Date(subCursor)
+              for (const it of sub) {
+                await guardar(it, subCursor)
+                const end = this.addDias(subCursor, it.dur)
+                if (end > subEnd) subEnd = end
+              }
+              subCursor = new Date(subEnd)
+              if (subEnd > etapaEnd) etapaEnd = new Date(subEnd)
+            }
           }
           for (const it of par) {
             await guardar(it, etapaStart)
