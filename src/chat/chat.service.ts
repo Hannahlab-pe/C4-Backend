@@ -1646,6 +1646,14 @@ const C4_TOOLS: LlmTool[] = [
   {
     type: 'function',
     function: {
+      name: 'asignar_cuadrillas',
+      description: 'Asigna las CUADRILLAS del personal a las PARTIDAS ya cargadas, según la especialidad de cada partida (encofrado → cuadrilla de encofrado; acero/fierro → fierrería; concreto/vaciado → concreto y vaciados; muro/ladrillo → albañilería; tarrajeo/pintura/piso → acabados; excavación → movimiento de tierras). Cada partida queda con su cuadrilla como RESPONSABLE. Úsala cuando el usuario pida "asigna los trabajadores/cuadrillas a las partidas" (necesita que ya estén cargados el presupuesto y el personal con sus cuadrillas). No pisa asignaciones existentes.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'cargar_obra_completa',
       description: 'INSERTA TODA LA OBRA desde el Excel que el usuario ACABA de subir en este chat: parsea el archivo server-side y carga TODAS las partidas (organizadas en etapas por fase, con metrado y precio) y TODA la nómina de personal (nombre, DNI, cargo, cuadrilla, jornal). Es la forma FIABLE de "insertar/cargar todo": NO transcribes tú las partidas ni los trabajadores — el sistema lee el Excel completo (evita que se te queden partidas o gente afuera). Úsala cuando el usuario suba un Excel de obra/presupuesto y confirme que quiere cargar/insertar todo. Si le pasas fecha_inicio, además arma el cronograma. Solo funciona con el Excel recién subido en el chat.',
       parameters: {
@@ -2520,7 +2528,7 @@ export class ChatService {
       this.logger.log(`buildUserContent: EXCEL detectado, CSV parseado len=${csv.length}`)
       if (dto.proyectoId && dto.archivoBase64) this.ultimoExcel.set(dto.proyectoId, dto.archivoBase64)
       if (!csv.trim()) return `${dto.mensaje}\n\n(No pude leer el Excel adjunto "${dto.archivoNombre ?? ''}".)`
-      return `${dto.mensaje || 'Te paso el presupuesto.'}\n\n---\nEL EXCEL DEL PRESUPUESTO YA ESTÁ ABAJO (contenido en CSV, "${dto.archivoNombre ?? 'presupuesto.xlsx'}"). NO pidas adjuntarlo ni preguntes "¿qué hoja?" ni "¿qué análisis?": YA lo tienes, ANALÍZALO YA en este turno. Puede traer varias hojas — usa la de PARTIDAS (columnas METRADO/UNIDAD/PARCIAL, ej. "PRESUPUESTO"); las de ratios/precios son auxiliares. Eres el ingeniero experto: texto plano, sin markdown.\n` +
+      return `${dto.mensaje || 'Te paso el presupuesto.'}\n\n---\nEL EXCEL DEL PRESUPUESTO YA ESTÁ ABAJO (contenido en CSV, "${dto.archivoNombre ?? 'presupuesto.xlsx'}"). NO pidas adjuntarlo ni preguntes "¿qué hoja?" ni "¿qué análisis?": YA lo tienes, ANALÍZALO YA en este turno. Puede traer varias hojas — usa la de PARTIDAS (columnas METRADO/UNIDAD/PARCIAL, ej. "PRESUPUESTO"); las de ratios/precios son auxiliares. Eres el ingeniero experto. Puedes usar MARKDOWN — se renderiza bien en el chat: usa **negritas** para lo importante, ## y ### para títulos de sección, listas con "-", y TABLAS markdown (| col | col |) para la lista de precios referenciales. Formatea claro y ordenado.\n` +
         `1) RESUMEN: nombre del proyecto, ubicación, N° de partidas y los capítulos (provisionales, concreto→cimentación/muros/losas, instalaciones…). MONTOS — distingue bien: el COSTO DIRECTO es la suma de las partidas; el TOTAL DE VENTA lleva encima Gastos Generales (%), Utilidad (%) e IGV (18%), que NO son partidas. Reporta ambos: costo directo ≈ S/X y total (con GG+utilidad+IGV) = S/Y (el "Total" del Excel). No los confundas ni fuerces que las partidas sumen el total con IGV.\n` +
         `2) RECOMENDACIONES honestas (2-4) como experto: ¿qué CUBRE y qué NO? Detecta faltantes y DILO — ej. "es solo el CASCO/obra gris: NO incluye acabados de arquitectura (pisos, pintura, aparatos, carpintería)"; "NO hay excavación ni movimiento de tierras"; partidas en S/0 marcadas 'Cliente' (las asume el cliente). Señala qué partidas pesan más.\n` +
         `3) PIDE lo que falte: si no hay excavación y podría haberla, o faltan acabados, PREGÚNTALE si quiere que las agregue tú (puedes crear esas partidas/etapas). No asumas: pregunta.\n` +
@@ -2634,6 +2642,7 @@ export class ChatService {
     if (name === 'actualizar_actividades') return this.toolActualizarActividades(args, res, proyectoId)
     if (name === 'crear_productividad') return this.toolCrearProductividad(args, res, proyectoId)
     if (name === 'cargar_obra_completa') return this.toolCargarObraCompleta(args, res, proyectoId)
+    if (name === 'asignar_cuadrillas') return this.toolAsignarCuadrillas(args, res, proyectoId)
     if (name === 'agregar_trabajadores') return this.toolAgregarTrabajadores(args, res, proyectoId)
     if (name === 'buscar_partidas') return this.toolBuscarPartidas(args)
     if (name === 'agregar_partidas') return this.toolAgregarPartidas(args, res, proyectoId)
@@ -3931,6 +3940,55 @@ export class ChatService {
     return { partidas, trabajadores }
   }
 
+  /** Devuelve la CUADRILLA (de las disponibles en la planilla) que corresponde a una partida, por su especialidad. */
+  private cuadrillaDePartida(nombre: string, etapa: string, cuadrillas: string[]): string | undefined {
+    if (!cuadrillas.length) return undefined
+    const nn = (s: any) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    const n = nn(`${nombre} ${etapa}`)
+    const find = (re: RegExp) => cuadrillas.find((c) => re.test(nn(c)))
+    // [keyword de la partida, keyword que debe tener el nombre de la cuadrilla]. El ORDEN importa
+    // (encofrado antes que concreto, porque "encofrado de columnas" tiene "columna").
+    const reglas: [RegExp, RegExp][] = [
+      [/encofrad/, /encofrad|carpinteria de (obra|encofrad)/],
+      [/acero|fierro/, /fierr|acero/],
+      [/muro|ladrillo|tabique|albanil/, /albanil|muro|tabique/],
+      [/tarrajeo|revoque|enlucido|derrame/, /tarrajeo|revoque|acabado|enlucido/],
+      [/pintura|empaste/, /pintura|acabado/],
+      [/piso|contrapiso|ceramic|porcelan|zocalo|enchape|laminad/, /piso|enchape|acabado|pintura/],
+      [/carpinteria|puerta|closet|mueble|melamina/, /carpinteria de madera|carpinteria|melamin/],
+      [/instalac|electric|sanitar|agua|desague|tablero|tomacorriente/, /instalac|electric|sanitar/],
+      [/excavac|movimiento|relleno|nivelac|eliminac|calzad|zanja/, /movimiento de tierra|excavac/],
+      [/concreto|vaciado|solado|cimiento|zapata|losa|columna|placa|\bviga|escalera|cisterna/, /concreto|vaciado|estructura/],
+    ]
+    for (const [pk, ck] of reglas) if (pk.test(n)) { const c = find(ck); if (c) return c }
+    return undefined
+  }
+
+  /** Asigna cuadrillas a las partidas ya cargadas, según su especialidad (no pisa asignaciones existentes). */
+  private async toolAsignarCuadrillas(_args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const prevP: any = (await this.fasesDetalle.obtener(proyectoId, 'personal_obra').catch(() => null))?.datos ?? {}
+    const lista: any[] = Array.isArray(prevP.lista) ? prevP.lista : []
+    const cuadrillas = [...new Set(lista.map((t) => t.cuadrilla).filter((c) => c && !/direccion|staff|tecnica|administr/i.test(c)))] as string[]
+    if (!cuadrillas.length) return { error: 'No hay cuadrillas en la planilla. Carga primero el personal (cada trabajador con su cuadrilla).' }
+    try {
+      let asignadas = 0
+      for (const fase of this.FASES_CRONO) {
+        const regs: any[] = await this.registrosFase.listar(proyectoId, fase).catch(() => [])
+        for (const r of regs) {
+          if (r?.datos?.responsable) continue
+          const cu = this.cuadrillaDePartida(r.nombre, r?.datos?.etapa ?? '', cuadrillas)
+          if (cu) { await this.registrosFase.actualizar(r.id, { datos: { ...(r.datos ?? {}), responsable: cu } }).catch(() => {}); asignadas++ }
+        }
+      }
+      res.write(`event:etapas_creadas\ndata:${JSON.stringify({})}\n\n`)
+      res.write(`event:cronograma_actualizado\ndata:${JSON.stringify({})}\n\n`)
+      return { ok: true, asignadas, mensaje: `Asigné cuadrillas a ${asignadas} partidas según su especialidad (encofrado→Carpintería de encofrado, acero→Fierrería, concreto→Concreto y vaciados, tarrajeo/pintura→acabados, etc.). Cada partida muestra su cuadrilla como responsable en el módulo de la fase y en el cronograma. Repórtaselo al usuario.` }
+    } catch (err: any) {
+      this.logger.error('Error asignando cuadrillas:', err?.message)
+      return { error: `Error asignando cuadrillas: ${err?.message}` }
+    }
+  }
+
   /** Parsea el Excel subido y carga TODA la obra: partidas en etapas por fase + nómina (+ cronograma si hay fecha). */
   private async toolCargarObraCompleta(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
     const base64 = this.ultimoExcel.get(proyectoId)
@@ -3944,6 +4002,8 @@ export class ChatService {
     const slug = (s: string) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30) || 'general'
     const resumenFases: string[] = []
     let totalPartidas = 0, montoTotal = 0
+    // Cuadrillas disponibles (del personal del Excel) → para asignar cada partida a su especialidad.
+    const cuadrillasDisp = [...new Set(trabajadores.map((t) => t.cuadrilla).filter((c) => c && !/direccion|staff|tecnica|administr/i.test(c)))] as string[]
     try {
       for (const fase of [...new Set(partidas.map((p) => p.fase))]) {
         const props = partidas.filter((p) => p.fase === fase)
@@ -3959,7 +4019,7 @@ export class ChatService {
           if (!etapas.some((e) => e.key === etapaKey)) etapas.push({ key: etapaKey, nombre: String(p.etapa).slice(0, 60), descripcion: 'Partidas del presupuesto' })
           await this.registrosFase.crear(proyectoId, fase, {
             nombre: p.nombre, estado: INIT_ESTADO[fase] ?? 'Programado',
-            datos: { unidad: p.unidad || undefined, cantidad: p.metrado, precioUnitario: p.pu, etapa: etapaKey, origen: 'presupuesto' },
+            datos: { unidad: p.unidad || undefined, cantidad: p.metrado, precioUnitario: p.pu, etapa: etapaKey, origen: 'presupuesto', responsable: this.cuadrillaDePartida(p.nombre, p.etapa, cuadrillasDisp) },
           })
           n++; totalPartidas++; montoTotal += p.metrado * p.pu
         }
@@ -3992,7 +4052,7 @@ export class ChatService {
       return {
         ok: true, partidas_cargadas: totalPartidas, costo_directo: Math.round(montoTotal), trabajadores: trabAgregados, fases: resumenFases,
         cronograma: crono?.ok ? { fin: crono.fin_obra, dias: crono.duracion_dias } : undefined,
-        mensaje: `Cargué del Excel TODA la obra: ${totalPartidas} partidas (costo directo ${fmtS(montoTotal)}) organizadas en etapas por fase (${resumenFases.join('; ')}), y ${trabAgregados} trabajador(es) en la planilla.${crono?.ok ? ` Armé el cronograma: fin estimado ${crono.fin_obra} (~${crono.duracion_dias} días).` : ' Falta el cronograma: ofrécele armarlo con generar_cronograma dándome la fecha de inicio.'} Repórtale los números REALES y dile que revise "Etapas de obra" por fase, "Personal de obra" en Equipo y el Cronograma.`,
+        mensaje: `Cargué del Excel TODA la obra: ${totalPartidas} partidas (costo directo ${fmtS(montoTotal)}) organizadas en etapas por fase (${resumenFases.join('; ')}), y ${trabAgregados} trabajador(es) en la planilla.${cuadrillasDisp.length ? ` Además asigné a cada partida su CUADRILLA como responsable según la especialidad (encofrado→Carpintería, acero→Fierrería, etc.).` : ''}${crono?.ok ? ` Armé el cronograma: fin estimado ${crono.fin_obra} (~${crono.duracion_dias} días).` : ' Falta el cronograma: ofrécele armarlo con generar_cronograma dándome la fecha de inicio.'} Repórtale los números REALES y dile que revise "Etapas de obra" por fase, "Personal de obra" en Equipo y el Cronograma.`,
       }
     } catch (err: any) {
       this.logger.error('Error en cargar_obra_completa:', err?.message)
