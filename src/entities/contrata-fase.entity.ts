@@ -14,8 +14,17 @@ export class ContrataFase {
   @Column()
   empresa: string
 
+  @Column({ default: '' })
+  ruc: string
+
   @Column({ default: 'otro' })
   tipo: string
+
+  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0, name: 'costo_unitario' })
+  costoUnitario: number
+
+  @Column({ default: 'm2' })
+  unidad: string
 
   @Column({ type: 'jsonb', default: [] })
   servicios: string[]
