@@ -3964,7 +3964,18 @@ export class ChatService {
     return undefined
   }
 
-  /** Asigna cuadrillas a las partidas ya cargadas, según su especialidad (no pisa asignaciones existentes). */
+  /** Para una partida, halla su cuadrilla y el TRABAJADOR responsable (el líder: capataz > operario > …). */
+  private responsableDePartida(nombre: string, etapa: string, workers: any[]): { cuadrilla?: string; responsable?: string } {
+    const nn = (s: any) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    const cuadrillas = [...new Set(workers.map((w) => w.cuadrilla).filter((c) => c && !/direccion|staff|tecnica|administr/i.test(c)))] as string[]
+    const cu = this.cuadrillaDePartida(nombre, etapa, cuadrillas)
+    if (!cu) return {}
+    const rango = (cargo: string) => { const c = nn(cargo); return /capataz/.test(c) ? 0 : /maestro/.test(c) ? 1 : /operario/.test(c) ? 2 : /operador/.test(c) ? 3 : /oficial/.test(c) ? 4 : 5 }
+    const lider = workers.filter((w) => w.cuadrilla === cu).sort((a, b) => rango(a.cargo) - rango(b.cargo))[0]
+    return { cuadrilla: cu, responsable: lider?.nombre || cu }
+  }
+
+  /** Asigna cuadrillas/responsables a las partidas ya cargadas, según su especialidad (no pisa asignaciones existentes). */
   private async toolAsignarCuadrillas(_args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
     const prevP: any = (await this.fasesDetalle.obtener(proyectoId, 'personal_obra').catch(() => null))?.datos ?? {}
     const lista: any[] = Array.isArray(prevP.lista) ? prevP.lista : []
@@ -3972,17 +3983,29 @@ export class ChatService {
     if (!cuadrillas.length) return { error: 'No hay cuadrillas en la planilla. Carga primero el personal (cada trabajador con su cuadrilla).' }
     try {
       let asignadas = 0
+      const porCuadrilla: Record<string, { resp: string; n: number }> = {}
       for (const fase of this.FASES_CRONO) {
         const regs: any[] = await this.registrosFase.listar(proyectoId, fase).catch(() => [])
         for (const r of regs) {
           if (r?.datos?.responsable) continue
-          const cu = this.cuadrillaDePartida(r.nombre, r?.datos?.etapa ?? '', cuadrillas)
-          if (cu) { await this.registrosFase.actualizar(r.id, { datos: { ...(r.datos ?? {}), responsable: cu } }).catch(() => {}); asignadas++ }
+          const asig = this.responsableDePartida(r.nombre, r?.datos?.etapa ?? '', lista)
+          if (asig.responsable && asig.cuadrilla) {
+            await this.registrosFase.actualizar(r.id, { datos: { ...(r.datos ?? {}), responsable: asig.responsable, cuadrilla: asig.cuadrilla } }).catch(() => {})
+            porCuadrilla[asig.cuadrilla] ??= { resp: asig.responsable, n: 0 }
+            porCuadrilla[asig.cuadrilla].n++
+            asignadas++
+          }
         }
       }
       res.write(`event:etapas_creadas\ndata:${JSON.stringify({})}\n\n`)
       res.write(`event:cronograma_actualizado\ndata:${JSON.stringify({})}\n\n`)
-      return { ok: true, asignadas, mensaje: `Asigné cuadrillas a ${asignadas} partidas según su especialidad (encofrado→Carpintería de encofrado, acero→Fierrería, concreto→Concreto y vaciados, tarrajeo/pintura→acabados, etc.). Cada partida muestra su cuadrilla como responsable en el módulo de la fase y en el cronograma. Repórtaselo al usuario.` }
+      const desglose = Object.entries(porCuadrilla)
+        .sort((a, b) => b[1].n - a[1].n)
+        .map(([cu, v]) => `${cu} → responsable ${v.resp}: ${v.n} partidas`)
+      return {
+        ok: true, asignadas, por_cuadrilla: desglose,
+        mensaje: `Asigné ${asignadas} partidas a un RESPONSABLE (el líder de cada cuadrilla, por nombre). DESGLOSE (muéstraselo al usuario en una TABLA markdown con columnas: Cuadrilla | Responsable | N° partidas):\n${desglose.join('\n')}\nDile DÓNDE verlo: en el CRONOGRAMA, al hacer click en una partida el panel muestra el "Encargado" (ahora es un desplegable con tus trabajadores), y en cada fase → "Metrado y costo" está la columna Responsable.`,
+      }
     } catch (err: any) {
       this.logger.error('Error asignando cuadrillas:', err?.message)
       return { error: `Error asignando cuadrillas: ${err?.message}` }
@@ -4017,9 +4040,10 @@ export class ChatService {
           if (yaNombres.has(p.nombre.toLowerCase().trim())) continue
           const etapaKey = slug(p.etapa)
           if (!etapas.some((e) => e.key === etapaKey)) etapas.push({ key: etapaKey, nombre: String(p.etapa).slice(0, 60), descripcion: 'Partidas del presupuesto' })
+          const asig = this.responsableDePartida(p.nombre, p.etapa, trabajadores)
           await this.registrosFase.crear(proyectoId, fase, {
             nombre: p.nombre, estado: INIT_ESTADO[fase] ?? 'Programado',
-            datos: { unidad: p.unidad || undefined, cantidad: p.metrado, precioUnitario: p.pu, etapa: etapaKey, origen: 'presupuesto', responsable: this.cuadrillaDePartida(p.nombre, p.etapa, cuadrillasDisp) },
+            datos: { unidad: p.unidad || undefined, cantidad: p.metrado, precioUnitario: p.pu, etapa: etapaKey, origen: 'presupuesto', cuadrilla: asig.cuadrilla, responsable: asig.responsable },
           })
           n++; totalPartidas++; montoTotal += p.metrado * p.pu
         }
