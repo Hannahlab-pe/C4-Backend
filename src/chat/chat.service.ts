@@ -1587,7 +1587,7 @@ const C4_TOOLS: LlmTool[] = [
     type: 'function',
     function: {
       name: 'cargar_presupuesto',
-      description: 'Carga las partidas de un PRESUPUESTO/METRADOS (leído de un Excel) como actividades de una fase, con su metrado (unidad, cantidad, precio unitario). Úsala DESPUÉS de leer un Excel de presupuesto, cuando el usuario confirme. Llama la herramienta UNA VEZ POR FASE. FIDELIDAD CRÍTICA: carga TODAS las partidas de la tabla, UNA POR UNA, con su descripción, metrado (cantidad) y precio unitario EXACTOS del Excel — NO las agrupes, NO las resumas en pocas, NO redondees los montos. La SUMA de lo que cargues debe COINCIDIR con el total del presupuesto (ej. si el Excel dice S/ 191,869, el total cargado debe ser ~S/ 191,869, no menos). Ignora solo las filas de capítulos/títulos/subtotales/totales; cada PARTIDA real (con metrado y precio) SÍ va. No inventes partidas que no estén.',
+      description: 'Carga las partidas de un PRESUPUESTO/METRADOS (leído de un Excel) como actividades de una fase, con su metrado (unidad, cantidad, precio unitario), y las ORGANIZA EN ETAPAS por capítulo (crea la etapa "Cimentación", "Muros", "Losas", etc. y mete ahí sus partidas). Úsala DESPUÉS de leer un Excel de presupuesto, cuando el usuario confirme. Llama la herramienta UNA VEZ POR FASE. FIDELIDAD CRÍTICA: carga TODAS las partidas de la tabla, UNA POR UNA, con su descripción, metrado (cantidad) y precio unitario EXACTOS del Excel — NO las agrupes, NO las resumas en pocas, NO redondees los montos. La SUMA de lo que cargues debe COINCIDIR con el total del presupuesto (ej. si el Excel dice S/ 191,869, el total cargado debe ser ~S/ 191,869, no menos). Ignora solo las filas de capítulos/títulos/subtotales/totales; cada PARTIDA real (con metrado y precio) SÍ va. No inventes partidas que no estén.',
       parameters: {
         type: 'object',
         properties: {
@@ -1598,7 +1598,8 @@ const C4_TOOLS: LlmTool[] = [
             items: {
               type: 'object',
               properties: {
-                nombre: { type: 'string', description: 'Descripción de la partida. Ej: "Concreto f\'c=210 en columnas".' },
+                nombre: { type: 'string', description: 'Descripción de la partida, PREFIJADA con su capítulo/etapa: "Cimentación — Acero fy=4200", "Muros — Suministro Doppel", "Losas — Prelosas". El prefijo (antes del "—") define la ETAPA donde se agrupa.' },
+                etapa: { type: 'string', description: 'Etapa/capítulo donde va la partida (ej. "Cimentación", "Muros", "Losas", "Instalaciones"). Opcional si ya prefijas el nombre; si lo das, se usa este.' },
                 unidad: { type: 'string', description: 'Unidad de metrado: m2 | m3 | und | ml | kg | glb… Opcional.' },
                 cantidad: { type: 'number', description: 'Metrado (cantidad). Opcional.' },
                 precio: { type: 'number', description: 'Precio unitario. Opcional.' },
@@ -2507,7 +2508,8 @@ export class ChatService {
         `3) PIDE lo que falte: si no hay excavación y podría haberla, o faltan acabados, PREGÚNTALE si quiere que las agregue tú (puedes crear esas partidas/etapas). No asumas: pregunta.\n` +
         `4) LISTA DE PRECIOS REFERENCIALES (CLAVE — es para coordinar con el ingeniero): arma una tabla de las partidas principales con METRADO, PRECIO UNITARIO referencial (S/) y, SIEMPRE, el PORQUÉ de ese precio. Si sale del Excel, dilo (PU = M.O+MAT, o PARCIAL÷metrado). Si una partida no tiene precio, está en S/0 'Cliente', o falta (excavación/acabados), PROPÓN un PU referencial de MERCADO LIMEÑO y JUSTIFÍCALO (composición aprox mano de obra + materiales + equipo, o rango de mercado). Une el precio con el TIEMPO: el rendimiento (CAPECO, con su porqué) y la duración = metrado÷rendimiento. Cierra invitándolo a REVISAR y AJUSTAR contigo los PU y rendimientos que no cuadren con su realidad — así coordinan tiempos, costos y partidas.\n` +
         `5) OFRÉCELE cargar las partidas y armar el cronograma. Al confirmar:\n` +
-        `   • cargar_presupuesto UNA VEZ POR FASE, con TODAS las partidas de esa fase, una por una, con metrado y PU EXACTOS (PU = M.O+MAT, o PARCIAL÷metrado). NO resumas, NO agrupes, NO redondees. Prefija el nombre con su capítulo para que se lea la secuencia: "Cimentación — Acero fy=4200", "Muros — Suministro Doppel", "Losas — Prelosas". La suma de lo cargado da el COSTO DIRECTO (no el total con IGV).\n` +
+        `   • cargar_presupuesto UNA VEZ POR FASE, con TODAS las partidas de esa fase, una por una, con metrado y PU EXACTOS (PU = M.O+MAT, o PARCIAL÷metrado). NO resumas, NO agrupes, NO redondees. Prefija el nombre con su capítulo: "Cimentación — Acero fy=4200", "Muros — Suministro Doppel", "Losas — Prelosas" — ese prefijo AGRUPA las partidas en ETAPAS automáticamente dentro del módulo de la fase. La suma de lo cargado da el COSTO DIRECTO (no el total con IGV).\n` +
+        `   • Si el usuario pide "inserta/analiza TODO", haz el FLUJO COMPLETO: cargar_presupuesto por cada fase (con sus etapas) + agregar_trabajadores (la nómina) + generar_cronograma. Así toda la data queda en el sistema: partidas en sus etapas, personal en Equipo, y el Gantt.\n` +
         `   • Clasifica por fase: obras provisionales + preliminares (caseta, trazo, EPP, grúa, transporte) → construccion (arranque de obra); concreto/cimentación/muros/losas/contrapiso → construccion; instalaciones eléctricas/sanitarias, sellado, tarrajeo/pisos/pintura → acabados. (Solo gestión pura —licencias, valorizaciones— va a administracion.)\n` +
         `   • Luego generar_cronograma (fecha inicio, jornada, frentes). El motor YA secuencia el casco por sub-fase (cimentación→muros→losas) y calcula la duración por metrado÷rendimiento; para las partidas grandes puedes pasar el rendimiento en "actividades" si lo sabes, si no usa uno referencial.\n` +
         `6) SI el Excel trae una NÓMINA/PLANILLA de personal (hoja con nombres + DNI + cargo/categoría + cuadrilla + jornal), MENCIÓNALO y OFRÉCELE cargar los trabajadores con agregar_trabajadores (TODOS, con nombre, DNI, cargo, CUADRILLA, EQUIPO que opera si es operador, y jornal). Aparecen en el módulo Equipo → Personal de obra y se pueden asignar como responsables.\n` +
@@ -3831,30 +3833,48 @@ export class ChatService {
     if (!INIT_ESTADO[fase]) return { error: 'Fase inválida. Usa: ' + Object.keys(INIT_ESTADO).join(', ') }
     const partidas: any[] = (args.partidas ?? []).filter((p: any) => p?.nombre && String(p.nombre).trim())
     if (!partidas.length) return { error: 'No hay partidas para cargar en esta fase.' }
+    const slug = (s: string) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30) || 'general'
     try {
       res.write(`event:status\ndata:${JSON.stringify({ step: `Cargando ${partidas.length} partidas del presupuesto en ${fase}...`, icon: 'check' })}\n\n`)
+      // Etapas existentes de la fase (para fusionar, no duplicar)
+      const prevDet: any = await this.fasesDetalle.obtener(proyectoId, `${fase}__etapas`).catch(() => null)
+      const etapas: any[] = Array.isArray(prevDet?.datos?.etapas) ? [...prevDet.datos.etapas] : []
       let total = 0
       for (const p of partidas.slice(0, 120)) {
         const cantidad = p.cantidad != null && !isNaN(Number(p.cantidad)) ? Number(p.cantidad) : undefined
         const precio = p.precio != null && !isNaN(Number(p.precio)) ? Number(p.precio) : undefined
+        // Etapa: explícita (p.etapa) o derivada del prefijo del nombre ("Cimentación — Acero…")
+        let nombre = String(p.nombre).trim()
+        let etapaNombre = p.etapa ? String(p.etapa).trim() : ''
+        if (!etapaNombre) {
+          const partes = nombre.split(/\s+[–—-]\s+/)
+          if (partes.length > 1 && partes[0].length <= 40) { etapaNombre = partes[0].trim(); nombre = partes.slice(1).join(' — ').trim() }
+        }
+        let etapaKey: string | undefined
+        if (etapaNombre) {
+          etapaKey = slug(etapaNombre)
+          if (!etapas.some((e) => e.key === etapaKey)) etapas.push({ key: etapaKey, nombre: etapaNombre.slice(0, 60), descripcion: 'Partidas del presupuesto' })
+        }
         await this.registrosFase.crear(proyectoId, fase, {
-          nombre: String(p.nombre).trim().slice(0, 200),
+          nombre: nombre.slice(0, 200) || String(p.nombre).trim().slice(0, 200),
           estado: INIT_ESTADO[fase],
           datos: {
             unidad: p.unidad ? String(p.unidad).trim().slice(0, 20) : undefined,
-            cantidad, precioUnitario: precio,
+            cantidad, precioUnitario: precio, etapa: etapaKey,
             origen: 'presupuesto',
           },
         })
         total++
       }
+      // Guardar las etapas (así las partidas quedan ORGANIZADAS en etapas dentro del módulo de la fase)
+      if (etapas.length) await this.fasesDetalle.guardar(proyectoId, `${fase}__etapas`, { ...(prevDet?.datos ?? {}), etapas })
       res.write(`event:etapas_creadas\ndata:${JSON.stringify({ fase })}\n\n`)
-      this.logger.log(`Presupuesto cargado en ${fase} de ${proyectoId}: ${total} partidas`)
+      this.logger.log(`Presupuesto cargado en ${fase} de ${proyectoId}: ${total} partidas en ${etapas.length} etapas`)
       const montoFase = partidas.reduce((a, p) => a + ((Number(p.cantidad) || 0) * (Number(p.precio) || 0)), 0)
       return {
-        ok: true, fase, cargadas: total,
+        ok: true, fase, cargadas: total, etapas: etapas.length,
         monto_fase: montoFase > 0 ? Math.round(montoFase) : undefined,
-        mensaje: `Cargué ${total} partida(s) del presupuesto en ${fase}${montoFase > 0 ? ` (S/ ${Math.round(montoFase).toLocaleString('es-PE')})` : ''}. Aparecen como actividades con su metrado y precio en el módulo de ${fase}. Confírmaselo al usuario con el número real, y OFRÉCELE armar el CRONOGRAMA con estas partidas (generar_cronograma usa el metrado÷rendimiento para el tiempo y el metrado×PU para el costo — solo necesitas confirmar rendimientos y fecha de inicio).`,
+        mensaje: `Cargué ${total} partida(s) del presupuesto en ${fase}, organizadas en ${etapas.length} etapa(s)${montoFase > 0 ? ` (S/ ${Math.round(montoFase).toLocaleString('es-PE')})` : ''}. Se ven en el módulo de ${fase} → "Etapas de obra" (cada etapa con sus partidas) y en "Metrado y costo". Confírmaselo con el número real, y OFRÉCELE armar el CRONOGRAMA (generar_cronograma).`,
       }
     } catch (err: any) {
       this.logger.error('Error cargando presupuesto:', err?.message)
