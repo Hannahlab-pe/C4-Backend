@@ -1844,16 +1844,18 @@ export class ChatService {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const XLSX = require('xlsx')
       const wb = XLSX.read(buffer, { type: 'buffer' })
-      // Prioriza las hojas de PARTIDAS/PRESUPUESTO (las que importan) antes que las auxiliares de ratios.
+      // Prioriza: PARTIDAS/PRESUPUESTO → NÓMINA/PERSONAL → CRONOGRAMA → resto (resumen, APU, insumos…),
+      // para que la data que C4 inserta (partidas y trabajadores) SIEMPRE entre aunque el Excel tenga muchas hojas.
       const nombres = [...(wb.SheetNames as string[])]
-      nombres.sort((a, b) => {
-        const rank = (n: string) => (/presupuest|partida|metrad/i.test(n) ? 0 : 1)
-        return rank(a) - rank(b)
-      })
+      const rank = (n: string) =>
+        /presupuest|partida|metrad/i.test(n) ? 0 :
+        /mano de obra|personal|n[oó]mina|planilla|trabajador|cuadrilla/i.test(n) ? 1 :
+        /cronograma|etapa/i.test(n) ? 2 : 3
+      nombres.sort((a, b) => rank(a) - rank(b))
       const partes: string[] = []
-      for (const name of nombres.slice(0, 3)) {
+      for (const name of nombres.slice(0, 5)) {
         const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name], { blankrows: false })
-        if (csv.trim()) partes.push(`### Hoja: ${name}\n${csv.slice(0, 14000)}`)
+        if (csv.trim()) partes.push(`### Hoja: ${name}\n${csv.slice(0, 10000)}`)
       }
       return partes.join('\n\n')
     } catch (e: any) {
