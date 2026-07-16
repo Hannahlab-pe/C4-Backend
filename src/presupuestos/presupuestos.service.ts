@@ -392,4 +392,50 @@ export class PresupuestosService {
       `${dto.archivo || 'archivo.xlsx'} · ${filas.length} filas · ${matcheadas} matcheadas · ${creadas} partidas nuevas · ${sueltas} sueltas`, usuarioId)
     return this.calcularArbol(pres.id)
   }
+
+  /**
+   * Crea un presupuesto ESTIMADO POR IA (borrador separado, tipo estimado_ia) desde las partidas que el
+   * chat reunió leyendo planos. Agrupa por capítulo (título) y calcula TODOS los totales por CÓDIGO
+   * (motor decimal — NO la IA). Nunca sobrescribe uno existente. El precio va como snapshot directo.
+   */
+  async crearEstimadoIa(dto: {
+    proyectoId: string; nombre?: string; ggPorcentaje?: number; utilidadPorcentaje?: number; igvPorcentaje?: number
+    partidas: { capitulo?: string; descripcion: string; unidad?: string; metrado?: number; precio?: number; confianza?: string }[]
+  }, usuarioId?: string) {
+    if (!dto?.proyectoId) throw new BadRequestException('Falta el proyecto.')
+    const partidas = (dto.partidas ?? []).filter((p) => p?.descripcion && String(p.descripcion).trim())
+    if (!partidas.length) throw new BadRequestException('No hay partidas para el presupuesto.')
+
+    const pres = await this.presupuestos.save(this.presupuestos.create({
+      proyectoId: dto.proyectoId, nombre: (dto.nombre?.trim() || 'Presupuesto estimado (IA)'), tipo: 'estimado_ia', moneda: 'PEN',
+      ggPorcentaje: String(dto.ggPorcentaje ?? 0.12), utilidadPorcentaje: String(dto.utilidadPorcentaje ?? 0.05), igvPorcentaje: String(dto.igvPorcentaje ?? 0.18),
+    }))
+
+    // Agrupar por capítulo (preservando orden de aparición) → título + sus partidas
+    const capOrden: string[] = []
+    const porCap = new Map<string, typeof partidas>()
+    for (const p of partidas) {
+      const cap = (String(p.capitulo || '').trim()) || 'Presupuesto'
+      if (!porCap.has(cap)) { porCap.set(cap, []); capOrden.push(cap) }
+      porCap.get(cap)!.push(p)
+    }
+    let orden = 0
+    for (const cap of capOrden) {
+      const titulo = await this.items.save(this.items.create({
+        presupuestoId: pres.id, parentId: null, tipo: 'titulo', codigo: '', descripcion: cap.slice(0, 120), orden: orden++,
+      }))
+      for (const p of porCap.get(cap)!) {
+        const baja = String(p.confianza) === 'baja'
+        await this.items.save(this.items.create({
+          presupuestoId: pres.id, parentId: titulo.id, tipo: 'partida', partidaId: null, codigo: '',
+          descripcion: String(p.descripcion).trim().slice(0, 220) + (baja ? '  (estimado, baja confianza — verificar)' : ''),
+          metrado: p.metrado != null && !isNaN(Number(p.metrado)) ? String(Number(p.metrado)) : null,
+          costoUnitarioSnapshot: p.precio != null && !isNaN(Number(p.precio)) ? String(Number(p.precio)) : null,
+          orden: orden++,
+        }))
+      }
+    }
+    await this.audit('presupuesto', pres.id, 'crear_estimado_ia', null, `${partidas.length} partidas · borrador IA desde planos`, usuarioId)
+    return this.calcularArbol(pres.id)
+  }
 }

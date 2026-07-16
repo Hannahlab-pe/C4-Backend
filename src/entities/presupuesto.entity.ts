@@ -1,6 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm'
 
-export type TipoPresupuesto = 'meta' | 'venta' | 'linea_base'
+export type TipoPresupuesto = 'meta' | 'venta' | 'linea_base' | 'estimado_ia'
 
 /**
  * Cabecera de un presupuesto. Los tres tipos (meta / venta / línea_base) son entidades

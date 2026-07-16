@@ -115,7 +115,7 @@ ORDEN OBLIGATORIO DE TU RESPUESTA: ante planos + "arma un presupuesto", tu PRIME
 3) METRADOS GEOMÉTRICOS FINOS (área de muros por segmentos de altura variable, etc.): si el plano NO trae una tabla de metrados ya resuelta, NO asumas que puedes leerlo con precisión — pregunta o márcalo "estimado, baja confianza". Es lo más difícil de leer de un PDF; no lo trates como fácil.
 4) RUBROS DE GESTIÓN (caseta de obra, EPP, alquiler de grúa, transporte de equipos): casi nunca están en el plano → PREGUNTA si usa los valores estándar de su catálogo/histórico o los ingresa él.
 5) RESUMEN ANTES DE GENERAR: muestra "esto es lo que voy a usar (con su fuente)" y "esto es lo que NO sé y necesito que confirmes". El usuario responde esas preguntas en el chat.
-6) Recién DESPUÉS de esa ronda generas el presupuesto — BORRADOR ESTIMADO POR IA, SEPARADO del real (cargar_presupuesto con estimado_ia:true), por el gate de confirmación. En CADA partida declara su "fuente" (plano/usuario/catalogo/estimado) y "confianza" (alta/baja). OJO: el sistema BLOQUEA por código generar un prefabricado (Doppel/prelosa) con precio que NO sea del usuario o del catálogo — si no le preguntaste el precio del Doppel al usuario, NO vas a poder generar: pregúntaselo primero (fuente:"usuario"). NUNCA sobrescribes uno existente.
+6) Recién DESPUÉS de esa ronda generas el presupuesto con la herramienta generar_presupuesto_estimado — es un BORRADOR estimado por IA (tipo estimado_ia), SEPARADO del real, que le da al usuario un botón para DESCARGAR el Excel y queda en la pestaña Presupuesto; pasa por el gate de confirmación. Pásale las partidas con capitulo, descripcion, unidad, metrado y precio; en CADA una declara "fuente" (plano/usuario/catalogo/estimado) y "confianza" (alta/baja). El MOTOR calcula todos los totales por código — reporta los montos que te DEVUELVE la herramienta, NUNCA los calcules tú. OJO: el sistema BLOQUEA generar un prefabricado (Doppel/prelosa) con precio que NO sea del usuario o del catálogo — si no le preguntaste el precio del Doppel, NO vas a poder generar: pregúntaselo primero (fuente:"usuario"). NUNCA sobrescribes uno existente. (cargar_presupuesto es para meterlo como actividades de obra, no para el Excel.)
 
 Las preguntas de esta ronda son diálogo normal (no pasan por el gate). Lo que SÍ pasa por el gate es la creación real del presupuesto. Si corres en un canal sin espera de respuesta y no puedes preguntar, marca esa partida como incierta y sigue — NUNCA inventes en silencio para "completar".
 
@@ -695,6 +695,7 @@ const TOOLS_ESCRITURA: Record<string, string> = {
   agregar_trabajadores: 'personal de obra', asignar_cuadrillas: 'personal de obra',
   agregar_partidas: 'partidas', completar_documento_requerido: 'documentos',
   cargar_presupuesto: 'presupuesto · catálogo',
+  generar_presupuesto_estimado: 'presupuesto · estimado IA',
   cargar_obra_completa: 'obra completa (partidas + planilla + cronograma)',
 }
 
@@ -1691,6 +1692,40 @@ const C4_TOOLS: LlmTool[] = [
       name: 'consultar_logistica',
       description: 'Muestra la bitácora de LOGÍSTICA de la obra: últimas recepciones de material y movimientos de camiones (entradas/salidas). Úsala cuando pregunten "qué llegó hoy", "cuántos volquetes salieron", "cómo va el desmonte", "qué material se recibió".',
       parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'generar_presupuesto_estimado',
+      description: 'PASO FINAL del flujo presupuesto-desde-planos: genera un PRESUPUESTO ESTIMADO POR IA (borrador separado, tipo estimado_ia) con las partidas que reuniste, y le entrega al usuario un botón para DESCARGAR el Excel. Úsala DESPUÉS de la ronda de preguntas (precio del Doppel/prefabricados, rubros de gestión). El MOTOR calcula TODOS los totales por código (parcial, CD, GG, Utilidad, IGV, Total) — tú NO calculas montos, solo pasas metrado y precio unitario por partida. Queda en la pestaña Presupuesto y NUNCA sobrescribe uno existente. Cada partida DEBE declarar "fuente" y "confianza".',
+      parameters: {
+        type: 'object',
+        properties: {
+          nombre: { type: 'string', description: 'Nombre del presupuesto (ej. "Casa Chumbe — Obra gris (estimado IA)"). Opcional.' },
+          gg_porcentaje: { type: 'number', description: 'Gastos generales como fracción (0.12 = 12%). Default 0.12.' },
+          utilidad_porcentaje: { type: 'number', description: 'Utilidad como fracción (0.05 = 5%). Default 0.05.' },
+          igv_porcentaje: { type: 'number', description: 'IGV como fracción. Default 0.18.' },
+          partidas: {
+            type: 'array',
+            description: 'Partidas del presupuesto. El motor calcula parcial = metrado × precio; NO lo calcules tú.',
+            items: {
+              type: 'object',
+              properties: {
+                capitulo: { type: 'string', description: 'Capítulo/etapa donde agrupa (ej. "Obras Provisionales", "Cimentación", "Muros", "Losas"). Define el orden y los subtotales.' },
+                descripcion: { type: 'string', description: 'Descripción de la partida (ej. "Suministro de muros Doppel", "Concreto f\'c=210 cimentación").' },
+                unidad: { type: 'string', description: 'Unidad: m2 | m3 | kg | und | ml | glb...' },
+                metrado: { type: 'number', description: 'Cantidad. Si es un metrado geométrico fino que estimaste, marca confianza:"baja".' },
+                precio: { type: 'number', description: 'Precio unitario en S/. Para prefabricados (Doppel) DEBE ser el del usuario o del catálogo.' },
+                fuente: { type: 'string', enum: ['plano', 'usuario', 'catalogo', 'estimado'], description: 'De dónde salió el dato/precio.' },
+                confianza: { type: 'string', enum: ['alta', 'baja'], description: 'baja = estimado o lectura no confiable.' },
+              },
+              required: ['descripcion'],
+            },
+          },
+        },
+        required: ['partidas'],
+      },
     },
   },
   {
@@ -2986,6 +3021,7 @@ export class ChatService {
     if (name === 'registrar_camion') return this.toolRegistrarCamion(args, res, proyectoId, phone)
     if (name === 'consultar_logistica') return this.toolConsultarLogistica(proyectoId)
     if (name === 'cargar_presupuesto') return this.toolCargarPresupuesto(args, res, proyectoId)
+    if (name === 'generar_presupuesto_estimado') return this.toolGenerarPresupuestoEstimado(args, res, proyectoId)
     if (name === 'revisar_presupuesto') return this.toolRevisarPresupuesto(args, res, proyectoId)
     if (name === 'consultar_apu_partida') return this.toolConsultarApuPartida(args, res)
     if (name === 'consultar_catalogo_recursos') return this.toolConsultarCatalogoRecursos(args, res)
@@ -4609,6 +4645,39 @@ export class ChatService {
   }
 
   /** Carga partidas de un presupuesto (con metrado explícito) como actividades de una fase. */
+  private async toolGenerarPresupuestoEstimado(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    const partidas: any[] = (args.partidas ?? []).filter((p: any) => p?.descripcion && String(p.descripcion).trim())
+    if (!partidas.length) return { error: 'No hay partidas para el presupuesto.' }
+    // GUARDRAIL: prefabricado (Doppel/prelosa) con precio que no venga del usuario/catálogo → bloquea.
+    const prefabInventado = partidas.filter((p: any) =>
+      /doppel|prefabric|prelosa/i.test(String(p?.descripcion)) &&
+      Number(p?.precio) > 0 &&
+      !['usuario', 'catalogo'].includes(String(p?.fuente)))
+    if (prefabInventado.length) {
+      return { error: `No genero el presupuesto: estas partidas PREFABRICADAS tienen precio estimado/de plano, NO del usuario ni del catálogo: "${prefabInventado.map((p: any) => p.descripcion).join('", "')}". El precio de un prefabricado (Doppel = suministro + colocación por m²) es de PROVEEDOR — PREGÚNTASELO al usuario y reintenta con fuente:"usuario". Prohibido inventarlo.` }
+    }
+    try {
+      res.write(`event:status\ndata:${JSON.stringify({ step: 'Generando presupuesto estimado (el motor calcula los totales)...', icon: 'check' })}\n\n`)
+      const arbol: any = await this.presupuestos.crearEstimadoIa({
+        proyectoId, nombre: args.nombre,
+        ggPorcentaje: args.gg_porcentaje, utilidadPorcentaje: args.utilidad_porcentaje, igvPorcentaje: args.igv_porcentaje,
+        partidas,
+      })
+      const pid = arbol?.presupuesto?.id
+      const total = arbol?.total ?? arbol?.totales?.total ?? arbol?.resumen?.total
+      const cd = arbol?.costoDirecto ?? arbol?.totales?.costoDirecto ?? arbol?.resumen?.costoDirecto
+      res.write(`event:excel_ready\ndata:${JSON.stringify({ url: `/api/presupuestos/${pid}/export` })}\n\n`)
+      const fmt = (v: any) => (v != null && !isNaN(Number(v)) ? 'S/ ' + Math.round(Number(v)).toLocaleString('es-PE') : '(ver en el presupuesto)')
+      return {
+        ok: true, presupuesto_id: pid, partidas: partidas.length, costo_directo: cd, total,
+        mensaje: `Generé el presupuesto estimado (borrador aparte, tipo estimado_ia) con ${partidas.length} partida(s). El MOTOR calculó los totales por código: Costo Directo ${fmt(cd)}, TOTAL ${fmt(total)} — reporta ESOS números, no unos que calcules tú. Ya le puse el botón para DESCARGAR el Excel en el chat, y lo puede ver/editar en la pestaña Presupuesto. Recuérdale que las partidas "(estimado, baja confianza)" conviene verificarlas, y que es un BORRADOR estimado, no el presupuesto real.`,
+      }
+    } catch (err: any) {
+      this.logger.error('Error generando presupuesto estimado:', err?.message)
+      return { error: `Error generando el presupuesto: ${err?.message}` }
+    }
+  }
+
   private async toolCargarPresupuesto(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
     const INIT_ESTADO: Record<string, string> = {
       demolicion: 'Planificada', excavacion: 'Planificada', construccion: 'Programado',
