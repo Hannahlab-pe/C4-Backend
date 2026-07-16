@@ -1733,25 +1733,10 @@ const C4_TOOLS: LlmTool[] = [
       parameters: { type: 'object', properties: {} },
     },
   },
-  // ✅ REACTIVADA (PASO 3 · 2026-07-16): 'cargar_obra_completa' vuelve al set, ahora PROTEGIDA por el gate
-  //    de confirmación (está en TOOLS_ESCRITURA → el modelo la propone pero NO se ejecuta sin OK del usuario,
-  //    y queda registrada en agent_audit_log). El kill-switch TOOLS_CONGELADAS sigue disponible por si hay
-  //    que re-congelarla en caliente.
-  {
-    type: 'function',
-    function: {
-      name: 'cargar_obra_completa',
-      description: 'INSERTA TODA LA OBRA desde el Excel que el usuario ACABA de subir en este chat: parsea el archivo server-side y carga TODAS las partidas (organizadas en etapas por fase, con metrado y precio) y TODA la nómina de personal (nombre, DNI, cargo, cuadrilla, jornal). Es la forma FIABLE de "insertar/cargar todo": NO transcribes tú las partidas ni los trabajadores — el sistema lee el Excel completo (evita que se te queden partidas o gente afuera). Úsala cuando el usuario suba un Excel de obra/presupuesto y confirme que quiere cargar/insertar todo. Si le pasas fecha_inicio, además arma el cronograma. Solo funciona con el Excel recién subido en el chat.',
-      parameters: {
-        type: 'object',
-        properties: {
-          fecha_inicio: { type: 'string', description: 'Fecha de inicio de obra YYYY-MM-DD. Si la das, además arma el cronograma. Opcional.' },
-          dias_semana: { type: 'number', description: 'Jornada: días trabajados por semana (default 6). Opcional.' },
-          frentes: { type: 'number', description: 'N° de frentes/cuadrillas en paralelo (default 1). Opcional.' },
-        },
-      },
-    },
-  },
+  // ⛔ CONGELADA (primer deploy del gate · 2026-07-16): 'cargar_obra_completa' se mantiene FUERA del set de
+  //    tools en este deploy grande. Ya está lista para reactivarse detrás del gate (marcada en TOOLS_ESCRITURA,
+  //    método intacto, definición original en git commit 013feac0), pero se reactiva en un 2º paso chico y
+  //    aislado una vez visto el gate en prod con tráfico real. Reactivar: restaurar tool def + vaciar TOOLS_CONGELADAS.
   {
     type: 'function',
     function: {
@@ -1855,8 +1840,8 @@ export class ChatService {
 
   /** Tools de escritura CONGELADAS (Paso 0, 2026-07-16): el dispatch las bloquea aunque el modelo las invoque. */
   // Kill-switch: cualquier tool acá queda DESHABILITADA en caliente (se salta el dispatch).
-  // Vacío tras PASO 3: 'cargar_obra_completa' ya no está congelada, la protege el gate de confirmación.
-  private readonly TOOLS_CONGELADAS = new Set<string>([])
+  // 'cargar_obra_completa' congelada en el primer deploy del gate; se reactiva en un 2º paso aislado.
+  private readonly TOOLS_CONGELADAS = new Set<string>(['cargar_obra_completa'])
   /** Acciones de escritura esperando confirmación del usuario (gate). Clave = sesión (proyecto[/teléfono]). */
   private readonly accionesPendientes = new Map<string, { messages: any[]; toolCalls: any[]; proyectoId: string; phone?: string; ts: number }>()
   private readonly analisisPorProyecto = new Map<string, any>()
@@ -2903,8 +2888,8 @@ export class ChatService {
     if (name === 'crear_vaciados') return this.toolCrearVaciados(args, res, proyectoId)
     if (name === 'actualizar_actividades') return this.toolActualizarActividades(args, res, proyectoId)
     if (name === 'crear_productividad') return this.toolCrearProductividad(args, res, proyectoId)
-    // ✅ REACTIVADA tras el gate (PASO 3): la protege el gate de confirmación + agent_audit_log.
-    //    Sigue el kill-switch TOOLS_CONGELADAS por si hay que re-congelarla en caliente.
+    // ⛔ Congelada en el primer deploy del gate (kill-switch TOOLS_CONGELADAS). Se reactiva en un 2º paso
+    //    aislado; al reactivarla quedará protegida por el gate + agent_audit_log como toda tool de escritura.
     if (name === 'cargar_obra_completa') {
       if (this.TOOLS_CONGELADAS.has(name)) return { error: 'cargar_obra_completa está temporalmente deshabilitada. No la invoques.' }
       return this.toolCargarObraCompleta(args, res, proyectoId)
