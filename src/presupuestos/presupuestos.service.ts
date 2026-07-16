@@ -58,7 +58,9 @@ export class PresupuestosService {
 
   // ── Recursos ──
   listarRecursos(proyectoId?: string) {
-    return this.recursos.find({ where: proyectoId ? [{ proyectoId }, { proyectoId: null as any }] : {}, order: { codigo: 'ASC' } })
+    const qb = this.recursos.createQueryBuilder('r').orderBy('r.codigo', 'ASC')
+    if (proyectoId) qb.where('r.proyectoId = :pid OR r.proyectoId IS NULL', { pid: proyectoId })
+    return qb.getMany()
   }
   crearRecurso(dto: Partial<Recurso>) { return this.recursos.save(this.recursos.create(dto)) }
 
@@ -86,7 +88,9 @@ export class PresupuestosService {
 
   // ── Partidas + APU ──
   listarPartidas(proyectoId?: string) {
-    return this.partidas.find({ where: proyectoId ? [{ proyectoId }, { proyectoId: null as any }] : {}, order: { codigo: 'ASC' } })
+    const qb = this.partidas.createQueryBuilder('p').orderBy('p.codigo', 'ASC')
+    if (proyectoId) qb.where('p.proyectoId = :pid OR p.proyectoId IS NULL', { pid: proyectoId })
+    return qb.getMany()
   }
   crearPartida(dto: Partial<Partida>) { return this.partidas.save(this.partidas.create(dto)) }
 
