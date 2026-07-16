@@ -23,6 +23,8 @@ import { FasesDetalleService } from '../fases-detalle/fases-detalle.service'
 import { RegistrosFaseService } from '../registros-fase/registros-fase.service'
 import { DocumentosRequeridosService } from '../documentos-requeridos/documentos-requeridos.service'
 import { PartidasCatalogoService } from '../partidas-catalogo/partidas-catalogo.service'
+import { PresupuestosService } from '../presupuestos/presupuestos.service'
+import { AgentAuditService } from '../audit/agent-audit.service'
 import { RNE_CONTEXTO } from './rne-contexto'
 import { COSTOS_REVISTA } from './costos-revista'
 import { GRUAS_FICHAS_TECNICAS } from './gruas-fichas'
@@ -647,6 +649,27 @@ El plano DXF resultante incluirá:
 
 // ─── Tool definitions ──────────────────────────────────────────────────────────
 
+/**
+ * Tools de IA que ESCRIBEN en la base de datos → pasan por el GATE de confirmación
+ * (nunca se ejecutan sin OK explícito del usuario). Formato: { nombre: módulo afectado }.
+ * Cualquier tool nueva que escriba debe agregarse acá para quedar cubierta por el gate.
+ */
+const TOOLS_ESCRITURA: Record<string, string> = {
+  crear_proyecto: 'proyectos', generar_proyecto: 'proyectos',
+  crear_etapas: 'obra · etapas', crear_seguridad: 'obra · seguridad', crear_colindantes: 'obra · colindantes',
+  crear_calzaduras: 'obra · calzaduras', crear_movimiento_tierras: 'obra · mov. tierras',
+  registrar_estudio_suelos: 'obra · suelos', crear_metrado_excavacion: 'obra · excavación',
+  crear_vaciados: 'obra · vaciados', crear_productividad: 'obra · productividad',
+  marcar_checklist_seguridad: 'obra · seguridad', crear_calidad: 'obra · calidad',
+  liberar_protocolo: 'obra · calidad', registrar_no_conformidad: 'obra · calidad',
+  registrar_recepcion_material: 'obra · logística', registrar_camion: 'obra · logística',
+  generar_cronograma: 'cronograma', actualizar_actividades: 'cronograma',
+  agregar_trabajadores: 'personal de obra', asignar_cuadrillas: 'personal de obra',
+  agregar_partidas: 'partidas', completar_documento_requerido: 'documentos',
+  cargar_presupuesto: 'presupuesto · catálogo',
+  cargar_obra_completa: 'obra completa (partidas + planilla + cronograma)',
+}
+
 const C4_TOOLS: LlmTool[] = [
   {
     type: 'function',
@@ -840,6 +863,65 @@ const C4_TOOLS: LlmTool[] = [
           },
         },
         required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'revisar_presupuesto',
+      description:
+        'Analiza un presupuesto del módulo de Presupuestos y Costos del proyecto actual y devuelve un diagnóstico técnico (totales, composición por genérico MO/MAT/EQP/SUB, distribución por título, mayores cost drivers, ratios acero/concreto, costo por m² y capítulos presentes/faltantes) para que des recomendaciones como INGENIERO DE COSTOS SENIOR. Úsalo cuando el usuario pida revisar, analizar, opinar o mejorar su presupuesto o sus costos.',
+      parameters: {
+        type: 'object',
+        properties: {
+          nombre: { type: 'string', description: 'Nombre o parte del nombre del presupuesto a revisar. Omitir para revisar el más reciente.' },
+          area_techada_m2: { type: 'number', description: 'Área techada total del edificio en m², si el usuario la mencionó. Sirve para calcular costo/m² y ratios por área. Omitir si no se conoce.' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'consultar_apu_partida',
+      description:
+        'Devuelve el desglose del Análisis de Precios Unitarios (APU) de una partida: sus insumos (recurso, cuadrilla/rendimiento/cantidad, precio, parcial) y el costo unitario. Úsalo para EXPLICAR de dónde sale un costo unitario, o para juzgar si un precio unitario es razonable. Es solo consulta: no modifica nada.',
+      parameters: {
+        type: 'object',
+        properties: {
+          partida: { type: 'string', description: 'Código (ej. "03.02") o parte de la descripción de la partida (ej. "concreto en columnas").' },
+        },
+        required: ['partida'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'consultar_catalogo_recursos',
+      description:
+        'Devuelve el catálogo de recursos (insumos) con sus precios actuales: mano de obra, materiales, equipos y subcontratos. Úsalo para armar un BORRADOR de APU con insumos y precios reales, o para juzgar si un precio es de mercado. Los borradores de APU NO se guardan: son propuestas para que el usuario revise y decida.',
+      parameters: {
+        type: 'object',
+        properties: {
+          filtro: { type: 'string', description: 'Texto para filtrar por nombre o código (ej. "cemento", "operario").' },
+          tipo: { type: 'string', description: 'MO | MAT | EQP | SUB para filtrar por tipo de recurso.' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'generar_excel_presupuesto',
+      description: 'Genera el archivo Excel (.xlsx) del presupuesto del proyecto actual y entrega un botón de descarga en el chat. Úsalo cuando el usuario pida "genérame / descárgame / exporta el Excel del presupuesto".',
+      parameters: {
+        type: 'object',
+        properties: { nombre: { type: 'string', description: 'Nombre o parte del nombre del presupuesto a exportar. Omitir para el más reciente.' } },
+        required: [],
       },
     },
   },
@@ -1651,6 +1733,10 @@ const C4_TOOLS: LlmTool[] = [
       parameters: { type: 'object', properties: {} },
     },
   },
+  // ✅ REACTIVADA (PASO 3 · 2026-07-16): 'cargar_obra_completa' vuelve al set, ahora PROTEGIDA por el gate
+  //    de confirmación (está en TOOLS_ESCRITURA → el modelo la propone pero NO se ejecuta sin OK del usuario,
+  //    y queda registrada en agent_audit_log). El kill-switch TOOLS_CONGELADAS sigue disponible por si hay
+  //    que re-congelarla en caliente.
   {
     type: 'function',
     function: {
@@ -1767,6 +1853,12 @@ const ETAPAS_TEMPLATE: Record<string, { key: string; nombre: string; descripcion
 export class ChatService {
   private readonly logger = new Logger(ChatService.name)
 
+  /** Tools de escritura CONGELADAS (Paso 0, 2026-07-16): el dispatch las bloquea aunque el modelo las invoque. */
+  // Kill-switch: cualquier tool acá queda DESHABILITADA en caliente (se salta el dispatch).
+  // Vacío tras PASO 3: 'cargar_obra_completa' ya no está congelada, la protege el gate de confirmación.
+  private readonly TOOLS_CONGELADAS = new Set<string>([])
+  /** Acciones de escritura esperando confirmación del usuario (gate). Clave = sesión (proyecto[/teléfono]). */
+  private readonly accionesPendientes = new Map<string, { messages: any[]; toolCalls: any[]; proyectoId: string; phone?: string; ts: number }>()
   private readonly analisisPorProyecto = new Map<string, any>()
   private readonly planoPorProyecto    = new Map<string, Buffer>()
   private readonly whatsappHist        = new Map<string, LlmMessage[]>() // memoria por número (canal WhatsApp)
@@ -1806,6 +1898,8 @@ export class ChatService {
     private registrosFase: RegistrosFaseService,
     private documentosRequeridos: DocumentosRequeridosService,
     private partidasCatalogo: PartidasCatalogoService,
+    private presupuestos: PresupuestosService,
+    private auditoria: AgentAuditService,
   ) {}
 
   getAnalisis(proyectoId: string): any | undefined {
@@ -2432,6 +2526,15 @@ export class ChatService {
     if (media?.imageBase64) this.lastChatImage.set(phone, { url: `data:${media.imageMime || 'image/jpeg'};base64,${media.imageBase64}`, ttl: 3 })
     else { const cur = this.lastChatImage.get(phone); if (cur && --cur.ttl <= 0) this.lastChatImage.delete(phone) }
 
+    // Gate: si hay una acción pendiente de confirmar para este teléfono, interpretamos
+    // este mensaje como la respuesta (sí/no), no como un pedido nuevo.
+    if (this.accionesPendientes.has(this.claveSesion(proyectoId, phone))) {
+      const t = (texto || '').trim().toLowerCase()
+      if (/^(s[ií]\b|confirmo|confirmar|dale|ok|okay|correcto|proced|adelante|h[aá]zlo|ya\b)/.test(t)) return this.resolverAccionBot(proyectoId, phone, true)
+      if (/^(no\b|cancela|cancelar|mejor no|d[eé]jalo|abortar|para\b)/.test(t)) return this.resolverAccionBot(proyectoId, phone, false)
+      return 'Tienes una acción pendiente de confirmar. Responde *SÍ* para ejecutarla o *NO* para cancelarla.'
+    }
+
     const hist = this.whatsappHist.get(phone) ?? []
     const messages: LlmMessage[] = [
       { role: 'system', content: systemPrompt },
@@ -2578,6 +2681,33 @@ export class ChatService {
         tool_calls: result.tool_calls,
       })
 
+      // ── GATE de confirmación ──────────────────────────────────────────────
+      // Si el modelo pide ESCRIBIR en la base, NO se ejecuta nada todavía: se guarda
+      // la acción como pendiente, se emite `confirmacion_requerida` con un resumen de
+      // lo que se va a crear/modificar, y el turno termina. La escritura solo ocurre
+      // cuando el usuario confirma (POST /chat/confirmar en web, o "SÍ" en el bot).
+      const hayEscritura = result.tool_calls.some((tc) => this.esEscritura(tc.function.name))
+      if (hayEscritura) {
+        // Prune de pendientes vencidos (>30 min) para no acumular en memoria.
+        const LIMITE = 30 * 60 * 1000
+        for (const [k, v] of this.accionesPendientes) if (Date.now() - v.ts > LIMITE) this.accionesPendientes.delete(k)
+
+        const resumen = this.resumirAcciones(result.tool_calls)
+        this.accionesPendientes.set(this.claveSesion(proyectoId, phone), {
+          messages: [...messages],
+          toolCalls: result.tool_calls,
+          proyectoId,
+          phone,
+          ts: Date.now(),
+        })
+        res.write(`event:confirmacion_requerida\ndata:${JSON.stringify(resumen)}\n\n`)
+        const aviso = (result.content && result.content.trim())
+          ? result.content.trim()
+          : `Antes de guardar necesito tu confirmación. Voy a ${resumen.resumen}. ¿Confirmas?`
+        await this.llm.streamText(aviso, res)
+        return aviso
+      }
+
       for (const tc of result.tool_calls) {
         // Si una tool lanza una excepción, se captura y se devuelve como error a la IA
         // (que responde con gracia) en vez de tumbar todo el turno.
@@ -2599,6 +2729,138 @@ export class ChatService {
     const fallback = 'No pude completar el análisis en el tiempo límite. Verifica que el servidor Python esté corriendo (`python -m uvicorn main:app --port 8000`) y vuelve a intentarlo.'
     await this.llm.streamText(fallback, res)
     return fallback
+  }
+
+  // ─── GATE de confirmación: helpers y ejecución diferida ───────────────────
+
+  private esEscritura(name: string): boolean {
+    return Object.prototype.hasOwnProperty.call(TOOLS_ESCRITURA, name)
+  }
+
+  /** Clave del store de pendientes: el bot se identifica por teléfono; la web por proyecto. */
+  private claveSesion(proyectoId: string, phone?: string): string {
+    return phone ? `bot::${phone}` : `web::${proyectoId}`
+  }
+
+  /** Arma el resumen legible de lo que se va a crear/modificar, para la tarjeta de confirmación. */
+  private resumirAcciones(toolCalls: ToolCall[]): { resumen: string; acciones: any[] } {
+    const acciones = toolCalls.map((tc) => {
+      let datos: any = {}
+      try { datos = JSON.parse(tc.function.arguments || '{}') } catch {}
+      const esW = this.esEscritura(tc.function.name)
+      return {
+        tool: tc.function.name,
+        esEscritura: esW,
+        modulo: esW ? (TOOLS_ESCRITURA[tc.function.name] ?? 'sistema') : 'lectura',
+        descripcion: this.describirAccion(tc.function.name, datos),
+        datos,
+      }
+    })
+    const resumen = acciones.filter((a) => a.esEscritura).map((a) => a.descripcion).join('; ')
+    return { resumen, acciones }
+  }
+
+  /** Frase humana de lo que hará una tool (para la tarjeta de confirmación). */
+  private describirAccion(name: string, args: any): string {
+    const modulo = TOOLS_ESCRITURA[name] ?? 'sistema'
+    const n = (v: any) => (Array.isArray(v) ? v.length : (typeof v === 'number' ? v : undefined))
+    switch (name) {
+      case 'cargar_obra_completa':
+        return 'cargar la obra completa (partidas, planilla de personal y cronograma) en el proyecto'
+      case 'agregar_partidas':
+        return `agregar ${n(args?.partidas) ?? ''} partida(s) a "${modulo}"`.replace('  ', ' ')
+      case 'agregar_trabajadores':
+        return `agregar ${n(args?.trabajadores) ?? ''} trabajador(es) a la planilla`.replace('  ', ' ')
+      case 'crear_etapas':
+        return `crear ${n(args?.etapas) ?? ''} etapa(s) de obra`.replace('  ', ' ')
+      case 'generar_cronograma':
+        return 'generar/actualizar el cronograma del proyecto'
+      case 'crear_proyecto':
+      case 'generar_proyecto':
+        return `crear un proyecto nuevo${args?.nombre ? ` ("${args.nombre}")` : ''}`
+      default:
+        return `${name.replace(/_/g, ' ')} → ${modulo}`
+    }
+  }
+
+  /**
+   * Ejecuta (o cancela) la acción pendiente ya resuelta por el usuario, audita cada escritura
+   * y reanuda el loop para que el modelo responda al resultado. Devuelve el texto final.
+   */
+  private async ejecutarAccionPendiente(
+    pend: { messages: any[]; toolCalls: any[]; proyectoId: string; phone?: string },
+    res: Response, confirmado: boolean, usuarioId?: string,
+  ): Promise<string> {
+    const { proyectoId, phone } = pend
+    const canal = phone ? 'whatsapp' : 'web'
+    for (const tc of pend.toolCalls) {
+      let datos: any = {}
+      try { datos = JSON.parse(tc.function.arguments || '{}') } catch {}
+
+      if (!confirmado) {
+        // Cancelado: no se ejecuta; se informa al modelo y (si era escritura) se audita como cancelado.
+        if (this.esEscritura(tc.function.name)) {
+          await this.auditoria.registrar({
+            tool: tc.function.name, modulo: TOOLS_ESCRITURA[tc.function.name] ?? null,
+            proyectoId, usuarioId: usuarioId ?? phone ?? null, canal,
+            payload: datos, confirmado: false, resultado: 'cancelado',
+          })
+        }
+        pend.messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ cancelado: true, mensaje: 'El usuario canceló esta acción. NO se ejecutó ni se guardó nada.' }) })
+        continue
+      }
+
+      let toolResult: any
+      try {
+        toolResult = await this.executeTool(tc, res, proyectoId, phone)
+      } catch (e: any) {
+        toolResult = { error: `No pude ejecutar ${tc.function?.name}: ${e?.message ?? 'error interno'}` }
+      }
+      if (this.esEscritura(tc.function.name)) {
+        await this.auditoria.registrar({
+          tool: tc.function.name, modulo: TOOLS_ESCRITURA[tc.function.name] ?? null,
+          proyectoId, usuarioId: usuarioId ?? phone ?? null, canal,
+          payload: datos, confirmado: true,
+          resultado: (toolResult && toolResult.error) ? 'error' : 'ok',
+        })
+      }
+      pend.messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(toolResult) })
+    }
+    // El modelo responde al resultado (puede encadenar más acciones → vuelve a gatear).
+    return this.runAgenticLoop(pend.messages, res, proyectoId, phone)
+  }
+
+  /** WEB: el usuario confirmó/canceló desde la tarjeta del chat. Persiste la respuesta del modelo. */
+  async resolverAccionWeb(proyectoId: string, user: any, confirmado: boolean, res: Response): Promise<void> {
+    const clave = this.claveSesion(proyectoId)
+    const pend = this.accionesPendientes.get(clave)
+    if (!pend) {
+      res.write(`event:error\ndata:${JSON.stringify({ message: 'No encontré una acción pendiente (pudo expirar). Vuelve a pedírmelo.' })}\n\n`)
+      res.write(`event:done\ndata:{}\n\n`)
+      return
+    }
+    this.accionesPendientes.delete(clave)
+    const finalText = await this.ejecutarAccionPendiente(pend, res, confirmado, user?.id)
+    if (finalText) {
+      try {
+        const sesion = await this.getOrCreateSesion(proyectoId, user.id)
+        await this.mensajeRepo.save(this.mensajeRepo.create({ sesionId: sesion.id, rol: 'assistant', contenido: finalText }))
+      } catch (e: any) { this.logger.warn(`No pude persistir respuesta post-confirmación: ${e?.message}`) }
+    }
+    res.write(`event:done\ndata:{}\n\n`)
+  }
+
+  /** BOT: confirmación/cancelación por texto ("sí"/"no"). Devuelve el texto a enviar al usuario. */
+  private async resolverAccionBot(proyectoId: string, phone: string, confirmado: boolean): Promise<string> {
+    const clave = this.claveSesion(proyectoId, phone)
+    const pend = this.accionesPendientes.get(clave)
+    if (!pend) return 'No tengo ninguna acción pendiente. ¿Qué necesitas?'
+    this.accionesPendientes.delete(clave)
+    const fakeRes = { write: () => true, end: () => {}, flush: () => {} } as unknown as Response
+    const text = await this.ejecutarAccionPendiente(pend, fakeRes, confirmado, phone)
+    const hist = this.whatsappHist.get(phone) ?? []
+    this.whatsappHist.set(phone, [...hist, { role: 'user', content: confirmado ? 'sí, confirmo' : 'no, cancela' }, { role: 'assistant', content: text }].slice(-12) as LlmMessage[])
+    return text || (confirmado ? 'Listo, ya lo guardé.' : 'Cancelado, no guardé nada.')
   }
 
   private async executeTool(tc: ToolCall, res: Response, proyectoId: string, phone?: string): Promise<any> {
@@ -2641,7 +2903,12 @@ export class ChatService {
     if (name === 'crear_vaciados') return this.toolCrearVaciados(args, res, proyectoId)
     if (name === 'actualizar_actividades') return this.toolActualizarActividades(args, res, proyectoId)
     if (name === 'crear_productividad') return this.toolCrearProductividad(args, res, proyectoId)
-    if (name === 'cargar_obra_completa') return this.toolCargarObraCompleta(args, res, proyectoId)
+    // ✅ REACTIVADA tras el gate (PASO 3): la protege el gate de confirmación + agent_audit_log.
+    //    Sigue el kill-switch TOOLS_CONGELADAS por si hay que re-congelarla en caliente.
+    if (name === 'cargar_obra_completa') {
+      if (this.TOOLS_CONGELADAS.has(name)) return { error: 'cargar_obra_completa está temporalmente deshabilitada. No la invoques.' }
+      return this.toolCargarObraCompleta(args, res, proyectoId)
+    }
     if (name === 'asignar_cuadrillas') return this.toolAsignarCuadrillas(args, res, proyectoId)
     if (name === 'agregar_trabajadores') return this.toolAgregarTrabajadores(args, res, proyectoId)
     if (name === 'buscar_partidas') return this.toolBuscarPartidas(args)
@@ -2656,6 +2923,10 @@ export class ChatService {
     if (name === 'registrar_camion') return this.toolRegistrarCamion(args, res, proyectoId, phone)
     if (name === 'consultar_logistica') return this.toolConsultarLogistica(proyectoId)
     if (name === 'cargar_presupuesto') return this.toolCargarPresupuesto(args, res, proyectoId)
+    if (name === 'revisar_presupuesto') return this.toolRevisarPresupuesto(args, res, proyectoId)
+    if (name === 'consultar_apu_partida') return this.toolConsultarApuPartida(args, res)
+    if (name === 'consultar_catalogo_recursos') return this.toolConsultarCatalogoRecursos(args, res)
+    if (name === 'generar_excel_presupuesto') return this.toolGenerarExcelPresupuesto(args, res, proyectoId)
     if (name === 'calcular_volumen_excavacion') return this.toolCalcularVolumenExcavacion(args, res, proyectoId)
 
     return { error: `Tool desconocida: ${name}` }
@@ -2701,6 +2972,196 @@ export class ChatService {
     } catch (err: any) {
       this.logger.warn(`Web search error: ${err?.response?.data?.error?.message ?? err?.message}`)
       return { error: `Error en búsqueda web: ${err?.response?.data?.error?.message ?? err?.message}` }
+    }
+  }
+
+  /**
+   * IA — Revisa un presupuesto del módulo Presupuestos y Costos y arma un diagnóstico técnico
+   * (totales, composición, ratios, cost drivers, capítulos) para que la IA opine como ing. de costos.
+   */
+  private async toolRevisarPresupuesto(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    res.write(`event:status\ndata:${JSON.stringify({ step: 'Analizando el presupuesto...', icon: 'search' })}\n\n`)
+    try {
+      const lista = await this.presupuestos.listarPresupuestos(proyectoId)
+      if (!lista.length) {
+        return { encontrado: false, mensaje: 'Este proyecto no tiene presupuestos en el módulo Presupuestos y Costos. Crea uno primero para poder revisarlo.' }
+      }
+      const filtro = String(args?.nombre ?? '').trim().toLowerCase()
+      const cab = (filtro && lista.find(p => p.nombre.toLowerCase().includes(filtro))) || lista[0]
+      const arbol = await this.presupuestos.calcularArbol(cab.id)
+
+      const n = (x: any) => Number(x ?? 0)
+      const items = arbol.items as any[]
+      const partidas = items.filter(it => it.tipo === 'partida')
+      const CD = arbol.costoDirecto || 1
+
+      // Composición por genérico (MO/MAT/EQP/SUB)
+      const g = arbol.porGenerico
+      const totG = (g.MO + g.MAT + g.EQP + g.SUB) || 1
+      const composicion = Object.fromEntries((['MO', 'MAT', 'EQP', 'SUB'] as const).map(k =>
+        [k, { monto: +g[k].toFixed(2), pct: +(g[k] / totG * 100).toFixed(1) }]))
+
+      // Distribución por título (capítulo)
+      const titulos = items.filter(it => it.tipo === 'titulo' && !it.parentId).map(t => ({
+        codigo: t.codigo, descripcion: t.descripcion,
+        subtotal: +(arbol.subtotales[t.id] ?? 0).toFixed(2),
+        pct: +(((arbol.subtotales[t.id] ?? 0) / CD) * 100).toFixed(1),
+      }))
+
+      // Mayores cost drivers (top 8 partidas por parcial)
+      const drivers = partidas
+        .map(p => ({ codigo: p.codigo, descripcion: p.descripcion, metrado: n(p.metrado), pu: n(p.costoUnitarioSnapshot), parcial: arbol.parciales[p.id] ?? 0 }))
+        .sort((a, b) => b.parcial - a.parcial).slice(0, 8)
+        .map(d => ({ ...d, parcial: +d.parcial.toFixed(2), pct: +((d.parcial / CD) * 100).toFixed(1) }))
+
+      // Ratios estructurales (por palabra clave en la descripción)
+      const sumKw = (kw: RegExp) => partidas.filter(p => kw.test((p.descripcion || '').toLowerCase())).reduce((s, p) => s + n(p.metrado), 0)
+      const concretoM3 = sumKw(/concreto/), aceroKg = sumKw(/acero|fierro|refuerzo/), encofradoM2 = sumKw(/encofrado/)
+      const aceroPorM3 = concretoM3 > 0 ? +(aceroKg / concretoM3).toFixed(1) : null
+
+      // Área techada (del argumento o del análisis de pre-inversión si existe)
+      let area = n(args?.area_techada_m2)
+      if (!area) { try { const a: any = await this.getAnalisisDb(proyectoId); area = n(a?.cabida?.area_construida_bruta ?? a?.area_construida_bruta) } catch { /* sin análisis */ } }
+      const porM2 = area > 0 ? {
+        area_techada_m2: area,
+        costo_total_por_m2: +(arbol.total / area).toFixed(2),
+        costo_directo_por_m2: +(CD / area).toFixed(2),
+        acero_kg_por_m2: +(aceroKg / area).toFixed(1),
+        concreto_m3_por_m2: +(concretoM3 / area).toFixed(3),
+      } : null
+
+      // Capítulos presentes (para detectar faltantes)
+      const texto = partidas.map(p => (p.descripcion || '').toLowerCase()).join(' | ')
+      const has = (re: RegExp) => re.test(texto)
+      const capitulos = {
+        estructuras: has(/concreto|acero|encofrado/),
+        instalaciones_sanitarias: has(/sanitari|agua|desag/),
+        instalaciones_electricas: has(/el[eé]ctric/),
+        ascensor: has(/ascensor/),
+        instalaciones_gas: has(/\bgas\b/),
+        comunicaciones_data: has(/comunicaci|data|internet|cctv|telecom/),
+        carpinteria: has(/puerta|ventana|closet|mampar/),
+        contra_incendios: has(/incendio|rociador|gabinete/),
+        aire_acondicionado: has(/aire acond|climatizaci|extracci/),
+      }
+
+      return {
+        encontrado: true,
+        presupuesto: {
+          nombre: cab.nombre, tipo: cab.tipo,
+          gg_pct: +(n(cab.ggPorcentaje) * 100).toFixed(1),
+          utilidad_pct: +(n(cab.utilidadPorcentaje) * 100).toFixed(1),
+          igv_pct: +(n(cab.igvPorcentaje) * 100).toFixed(0),
+        },
+        totales: {
+          costo_directo: +arbol.costoDirecto.toFixed(2), gastos_generales: +arbol.gastosGenerales.toFixed(2),
+          utilidad: +arbol.utilidad.toFixed(2), subtotal: +arbol.subtotal.toFixed(2), igv: +arbol.igv.toFixed(2), total: +arbol.total.toFixed(2),
+        },
+        por_m2: porM2,
+        composicion_por_generico: composicion,
+        distribucion_por_titulo: titulos,
+        mayores_cost_drivers: drivers,
+        ratios_estructurales: { concreto_m3: +concretoM3.toFixed(2), acero_kg: +aceroKg.toFixed(2), encofrado_m2: +encofradoM2.toFixed(2), acero_kg_por_m3_concreto: aceroPorM3 },
+        capitulos_presentes: capitulos,
+        instruccion: [
+          'Actúa como INGENIERO DE COSTOS SENIOR peruano revisando este presupuesto. Responde en español, con markdown y viñetas, específico y accionable:',
+          '1) Veredicto general (¿bien armado?, ¿le falta?, ¿barato/caro para el mercado?).',
+          '2) Ratios: acero por m³ de concreto esperado ~80–150 kg/m³ (columnas y placas suben); si hay área, concreto ~0.20–0.30 m³/m² y acero ~35–55 kg/m². Marca lo que esté fuera de rango.',
+          '3) Capítulos que podrían FALTAR: revisa capitulos_presentes; si falta gas, comunicaciones/data, contra incendios, ascensor o aire acondicionado y el edificio los necesita, dilo.',
+          '4) Precios: si el usuario quiere validar contra el mercado ACTUAL, usa la tool buscar_en_internet (ej. "precio saco cemento Sol Lima 2026", "precio acero corrugado kg Perú").',
+          '5) GG% y Utilidad%: comenta si son razonables (obras grandes ~8–12% c/u).',
+          '6) Los 2–3 mayores cost drivers y su riesgo (ej. acero = insumo volátil).',
+          'Sé concreto con números. Si algo está bien, dilo claramente. NO inventes partidas que no están en los datos.',
+        ].join(' '),
+      }
+    } catch (err: any) {
+      this.logger.warn(`revisar_presupuesto error: ${err?.message}`)
+      return { error: `No pude analizar el presupuesto: ${err?.message}` }
+    }
+  }
+
+  /** IA (consultivo) — Desglose del APU de una partida, para explicar/juzgar su costo unitario. */
+  private async toolConsultarApuPartida(args: Record<string, any>, res: Response): Promise<any> {
+    res.write(`event:status\ndata:${JSON.stringify({ step: 'Consultando el APU de la partida...', icon: 'search' })}\n\n`)
+    try {
+      const q = String(args?.partida ?? '').trim().toLowerCase()
+      if (!q) return { error: 'Indica el código o el nombre de la partida.' }
+      const partidas = await this.presupuestos.listarPartidas()
+      const texto = (x: any) => `${x.codigo} ${x.descripcion}`.toLowerCase()
+      const tokens = q.split(/\s+/).filter((t) => t.length > 2) // ignora "en", "de", etc.
+      const p = partidas.find((x) => x.codigo.toLowerCase() === q)
+        || partidas.find((x) => texto(x).includes(q))
+        || partidas.find((x) => tokens.length > 0 && tokens.every((t) => texto(x).includes(t)))
+      if (!p) {
+        return {
+          encontrado: false,
+          mensaje: `No encontré una partida que coincida con "${args.partida}".`,
+          partidas_disponibles: partidas.slice(0, 40).map((x) => `${x.codigo} — ${x.descripcion}`),
+        }
+      }
+
+      const { lineas, calculo } = await this.presupuestos.getApu(p.id)
+      const recursos = await this.presupuestos.listarRecursos()
+      const recMap = new Map(recursos.map((r) => [r.id, r]))
+      const n = (x: any) => Number(x ?? 0)
+      const detalle = lineas.map((l) => {
+        const r: any = recMap.get(l.refId)
+        const esJornal = l.clase === 'MO' || l.clase === 'EQP'
+        const cant = esJornal ? (n(l.rendimiento) ? n(l.cuadrilla) / n(l.rendimiento) : 0) : n(l.cantidad)
+        const precio = n(r?.precioUnitario)
+        return {
+          recurso: r?.nombre ?? '(no encontrado)', tipo: l.clase, unidad: r?.unidad ?? '',
+          cuadrilla: l.cuadrilla ?? null, rendimiento: l.rendimiento ?? null,
+          cantidad: +cant.toFixed(4), precio, parcial: +(cant * precio).toFixed(2),
+        }
+      })
+      return {
+        encontrado: true,
+        partida: { codigo: p.codigo, descripcion: p.descripcion, unidad: p.unidad },
+        costo_unitario: +n(calculo.costoUnitario).toFixed(2),
+        lineas: detalle,
+        por_generico: Object.fromEntries(Object.entries(calculo.porGenerico).map(([k, v]) => [k, +n(v).toFixed(2)])),
+        instruccion: 'Explica de dónde sale el costo unitario, insumo por insumo, en lenguaje claro. Si preguntan si es razonable, compáralo con rangos de mercado peruano y explica por qué (rendimientos y precios). Es SOLO consulta: no modificas nada.',
+      }
+    } catch (err: any) {
+      this.logger.warn(`consultar_apu_partida error: ${err?.message}`)
+      return { error: `No pude consultar el APU: ${err?.message}` }
+    }
+  }
+
+  /** IA (consultivo) — Catálogo de recursos con precios, para armar borradores de APU o juzgar precios. */
+  private async toolConsultarCatalogoRecursos(args: Record<string, any>, res: Response): Promise<any> {
+    res.write(`event:status\ndata:${JSON.stringify({ step: 'Consultando el catálogo de recursos...', icon: 'search' })}\n\n`)
+    try {
+      const filtro = String(args?.filtro ?? '').trim().toLowerCase()
+      const tipo = String(args?.tipo ?? '').trim().toUpperCase()
+      let recursos = await this.presupuestos.listarRecursos()
+      if (tipo) recursos = recursos.filter((r) => r.tipo === tipo)
+      if (filtro) recursos = recursos.filter((r) => r.nombre.toLowerCase().includes(filtro) || r.codigo.toLowerCase().includes(filtro))
+      return {
+        total: recursos.length,
+        recursos: recursos.slice(0, 80).map((r) => ({ codigo: r.codigo, nombre: r.nombre, tipo: r.tipo, unidad: r.unidad, precio: Number(r.precioUnitario) })),
+        instruccion: 'Para armar un BORRADOR de APU usa estos recursos y precios REALES; agrega rendimientos estándar de obra peruana (MO/EQP: cantidad = cuadrilla ÷ rendimiento; MAT/SUB: cantidad fija por unidad); calcula el costo unitario y preséntalo como TABLA (recurso, cuadrilla/rend/cant, precio, parcial, y el total). ACLARA SIEMPRE que es un borrador para que el usuario lo revise y decida — NO se guarda. Si te piden validar un precio, compáralo con el mercado.',
+      }
+    } catch (err: any) {
+      this.logger.warn(`consultar_catalogo_recursos error: ${err?.message}`)
+      return { error: `No pude consultar el catálogo: ${err?.message}` }
+    }
+  }
+
+  /** IA — Genera el Excel del presupuesto y emite un botón de descarga en el chat (como el PDF). */
+  private async toolGenerarExcelPresupuesto(args: Record<string, any>, res: Response, proyectoId: string): Promise<any> {
+    res.write(`event:status\ndata:${JSON.stringify({ step: 'Generando el Excel del presupuesto...', icon: 'download' })}\n\n`)
+    try {
+      const lista = await this.presupuestos.listarPresupuestos(proyectoId)
+      if (!lista.length) return { encontrado: false, mensaje: 'Este proyecto no tiene presupuestos para exportar. Crea uno primero.' }
+      const filtro = String(args?.nombre ?? '').trim().toLowerCase()
+      const cab = (filtro && lista.find((p) => p.nombre.toLowerCase().includes(filtro))) || lista[0]
+      res.write(`event:excel_ready\ndata:${JSON.stringify({ url: `/api/presupuestos/${cab.id}/export`, nombre: cab.nombre })}\n\n`)
+      return { ok: true, presupuesto: cab.nombre, mensaje: `Generé el Excel de "${cab.nombre}". El botón de descarga ya aparece en el chat; confírmalo breve al usuario.` }
+    } catch (err: any) {
+      this.logger.warn(`generar_excel_presupuesto error: ${err?.message}`)
+      return { error: `No pude generar el Excel: ${err?.message}` }
     }
   }
 

@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository } from 'typeorm'
+import * as ExcelJS from 'exceljs'
 import { Recurso } from '../entities/recurso.entity'
 import { RecursoPrecio } from '../entities/recurso-precio.entity'
 import { Partida } from '../entities/partida.entity'
@@ -11,6 +12,8 @@ import { AuditLog } from '../entities/audit-log.entity'
 import {
   calcularApu, calcularPresupuesto, CalcContext, ApuLinea, ItemDef, ApuResultado,
 } from './engine'
+import { parseExcelPresupuesto } from './import/import-excel'
+import { matchPartida, CatalogoItem } from './import/matching'
 
 /** Servicio del módulo Presupuestos y Costos. Toda la lógica de negocio usa el motor puro. */
 @Injectable()
@@ -221,5 +224,168 @@ export class PresupuestosService {
     await this.items.delete({ id })
     await this.audit('presupuesto_item', id, 'eliminar', it.descripcion, null, usuarioId)
     return { ok: true }
+  }
+
+  // ── Export a Excel ──
+  /**
+   * Exporta el presupuesto a Excel (Hoja "Resumen") replicando el árbol tal cual se ve en pantalla.
+   * Usa los SNAPSHOTS guardados (no recalcula): el Excel coincide número por número con la UI.
+   */
+  async exportarExcel(presupuestoId: string): Promise<{ buffer: Buffer; filename: string }> {
+    const arbol = await this.calcularArbol(presupuestoId)
+    const p = arbol.presupuesto
+    const partidas = await this.partidas.find()
+    const unidadDe = new Map(partidas.map((x) => [x.id, x.unidad]))
+    const n = (x: any) => Number(x ?? 0)
+
+    // Aplanar el árbol en orden (títulos + partidas) con su profundidad
+    const porPadre = new Map<string | null, PresupuestoItem[]>()
+    for (const it of arbol.items) { const k = it.parentId ?? null; if (!porPadre.has(k)) porPadre.set(k, []); porPadre.get(k)!.push(it) }
+    for (const arr of porPadre.values()) arr.sort((a, b) => a.orden - b.orden)
+    const filas: { it: PresupuestoItem; depth: number }[] = []
+    const walk = (padre: string | null, depth: number) => {
+      for (const it of porPadre.get(padre) ?? []) { filas.push({ it, depth }); if (it.tipo === 'titulo') walk(it.id, depth + 1) }
+    }
+    walk(null, 0)
+
+    const wb = new ExcelJS.Workbook()
+    wb.creator = 'C4 — Presupuestos y Costos'
+    const ws = wb.addWorksheet('Resumen', { views: [{ state: 'frozen', ySplit: 5 }] })
+    ws.columns = [
+      { key: 'codigo', width: 12 }, { key: 'descripcion', width: 58 }, { key: 'und', width: 8 },
+      { key: 'metrado', width: 14 }, { key: 'pu', width: 14 }, { key: 'parcial', width: 17 },
+    ]
+
+    // Cabecera del documento
+    ws.mergeCells('A1:F1'); ws.getCell('A1').value = p.nombre; ws.getCell('A1').font = { bold: true, size: 14 }
+    ws.mergeCells('A2:F2'); ws.getCell('A2').value = `Tipo: ${p.tipo.toUpperCase()}  ·  Moneda: ${p.moneda}`
+    ws.getCell('A2').font = { size: 10, color: { argb: 'FF64748B' } }
+
+    // Encabezados de columna (fila 5)
+    const head = ws.getRow(5)
+    head.values = ['Código', 'Descripción', 'Und', 'Metrado', 'P.U. (S/)', 'Parcial (S/)']
+    head.eachCell((c) => {
+      c.font = { bold: true, color: { argb: 'FFFFFFFF' } }
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } }
+      c.alignment = { vertical: 'middle', horizontal: 'left' }
+    })
+
+    const NUM = '#,##0.00'
+    for (const { it, depth } of filas) {
+      const esTitulo = it.tipo === 'titulo'
+      const row = ws.addRow({
+        codigo: it.codigo || '',
+        descripcion: it.descripcion || '',
+        und: esTitulo ? '' : (unidadDe.get(it.partidaId as string) ?? ''),
+        metrado: esTitulo ? null : n(it.metrado),
+        pu: esTitulo ? null : n(it.costoUnitarioSnapshot),
+        parcial: esTitulo ? (arbol.subtotales[it.id] ?? 0) : (arbol.parciales[it.id] ?? 0),
+      })
+      row.getCell('descripcion').alignment = { indent: depth }
+      for (const k of ['metrado', 'pu', 'parcial']) row.getCell(k).numFmt = NUM
+      if (esTitulo) {
+        row.font = { bold: true }
+        row.eachCell((c) => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } } })
+      }
+    }
+
+    ws.addRow({})
+    const totales: [string, number, boolean?][] = [
+      ['COSTO DIRECTO', arbol.costoDirecto],
+      [`GASTOS GENERALES (${(n(p.ggPorcentaje) * 100).toFixed(1)}%)`, arbol.gastosGenerales],
+      [`UTILIDAD (${(n(p.utilidadPorcentaje) * 100).toFixed(1)}%)`, arbol.utilidad],
+      ['SUBTOTAL', arbol.subtotal],
+      [`IGV (${(n(p.igvPorcentaje) * 100).toFixed(0)}%)`, arbol.igv],
+      ['TOTAL', arbol.total, true],
+    ]
+    for (const [label, val, esTotal] of totales) {
+      const row = ws.addRow({ codigo: label, parcial: val })
+      ws.mergeCells(row.number, 1, row.number, 5)
+      row.getCell(1).alignment = { horizontal: 'right' }
+      row.getCell(1).font = { bold: !!esTotal || label === 'COSTO DIRECTO' || label === 'SUBTOTAL', size: esTotal ? 12 : 11 }
+      row.getCell('parcial').numFmt = NUM
+      row.getCell('parcial').font = { bold: true, size: esTotal ? 12 : 11, color: { argb: esTotal ? 'FF2563EB' : 'FF0F172A' } }
+    }
+
+    const buffer = Buffer.from(await wb.xlsx.writeBuffer())
+    const filename = `${(p.nombre || 'presupuesto').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_')}.xlsx`
+    return { buffer, filename }
+  }
+
+  // ── Import desde Excel (paso 1-2: parseo + preview con matching; NO escribe nada) ──
+  async previewImport(buffer: Buffer) {
+    const parsed = await parseExcelPresupuesto(buffer)
+    const catalogo: CatalogoItem[] = (await this.partidas.find()).map((p) => ({ id: p.id, codigo: p.codigo, descripcion: p.descripcion, unidad: p.unidad }))
+    const filas = parsed.filas.map((f, i) => ({
+      ...f, orden: i,
+      match: f.esTitulo ? null : matchPartida(f.codigo, f.descripcion, catalogo),
+    }))
+    const partidas = filas.filter((f) => !f.esTitulo)
+    return {
+      hoja: parsed.hoja,
+      columnas: parsed.columnas,
+      advertencias: parsed.advertencias,
+      resumen: {
+        titulos: filas.filter((f) => f.esTitulo).length,
+        partidas: partidas.length,
+        match_codigo: partidas.filter((f) => f.match?.tipo === 'codigo').length,
+        match_texto: partidas.filter((f) => f.match?.tipo === 'texto').length,
+        nuevas: partidas.filter((f) => f.match?.tipo === 'nuevo').length,
+      },
+      filas,
+    }
+  }
+
+  /**
+   * Import paso 4: crea un presupuesto NUEVO (nunca sobrescribe) desde las filas ya revisadas y
+   * confirmadas por el usuario. Los costos unitarios son SNAPSHOTS del Excel (no recalcula).
+   * Reconstruye el árbol título/partida por la profundidad del código (nivel).
+   */
+  async confirmarImport(dto: any, usuarioId?: string) {
+    if (!dto?.proyectoId) throw new BadRequestException('Falta el proyecto.')
+    if (!dto?.nombre?.trim()) throw new BadRequestException('Falta el nombre del presupuesto.')
+    const filas: any[] = Array.isArray(dto.filas) ? dto.filas : []
+    if (filas.length === 0) throw new BadRequestException('No hay filas para importar.')
+
+    const pres = await this.presupuestos.save(this.presupuestos.create({
+      proyectoId: dto.proyectoId, nombre: dto.nombre.trim(), tipo: dto.tipo || 'meta', moneda: dto.moneda || 'PEN',
+      ggPorcentaje: String(dto.ggPorcentaje ?? 0), utilidadPorcentaje: String(dto.utilidadPorcentaje ?? 0), igvPorcentaje: String(dto.igvPorcentaje ?? 0.18),
+    }))
+
+    const pila: { nivel: number; id: string }[] = []
+    let creadas = 0, matcheadas = 0, sueltas = 0
+    for (let i = 0; i < filas.length; i++) {
+      const f = filas[i]
+      const nivel = Number(f.nivel ?? 0)
+      const parentId = () => (pila.length ? pila[pila.length - 1].id : null)
+      if (f.esTitulo) {
+        while (pila.length && pila[pila.length - 1].nivel >= nivel) pila.pop()
+        const item = await this.items.save(this.items.create({
+          presupuestoId: pres.id, parentId: parentId(), tipo: 'titulo',
+          codigo: String(f.codigo ?? ''), descripcion: String(f.descripcion ?? ''), orden: i,
+        }))
+        pila.push({ nivel, id: item.id })
+      } else {
+        let partidaId: string | null = null
+        if (f.decision === 'match' && f.partidaId) { partidaId = f.partidaId; matcheadas++ }
+        else if (f.decision === 'nueva') {
+          const np = await this.partidas.save(this.partidas.create({
+            codigo: String(f.codigo ?? ''), descripcion: String(f.descripcion ?? ''), unidad: String(f.unidad ?? ''), especialidad: '',
+          }))
+          partidaId = np.id; creadas++
+        } else { sueltas++ } // 'solo' → asociada solo a este presupuesto (sin partida de catálogo)
+        await this.items.save(this.items.create({
+          presupuestoId: pres.id, parentId: parentId(), tipo: 'partida', partidaId,
+          codigo: String(f.codigo ?? ''), descripcion: String(f.descripcion ?? ''),
+          metrado: f.metrado != null ? String(f.metrado) : null,
+          costoUnitarioSnapshot: f.precioUnitario != null ? String(f.precioUnitario) : null, // snapshot del Excel
+          orden: i,
+        }))
+      }
+    }
+
+    await this.audit('presupuesto', pres.id, 'import_excel', null,
+      `${dto.archivo || 'archivo.xlsx'} · ${filas.length} filas · ${matcheadas} matcheadas · ${creadas} partidas nuevas · ${sueltas} sueltas`, usuarioId)
+    return this.calcularArbol(pres.id)
   }
 }

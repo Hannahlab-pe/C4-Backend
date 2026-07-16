@@ -21,6 +21,8 @@ import { FasesDetalleModule } from '../fases-detalle/fases-detalle.module'
 import { RegistrosFaseModule } from '../registros-fase/registros-fase.module'
 import { DocumentosRequeridosModule } from '../documentos-requeridos/documentos-requeridos.module'
 import { PartidasCatalogoModule } from '../partidas-catalogo/partidas-catalogo.module'
+import { PresupuestosModule } from '../presupuestos/presupuestos.module'
+import { AgentAuditModule } from '../audit/agent-audit.module'
 
 @Module({
   imports: [
@@ -35,6 +37,8 @@ import { PartidasCatalogoModule } from '../partidas-catalogo/partidas-catalogo.m
     RegistrosFaseModule,
     DocumentosRequeridosModule,
     PartidasCatalogoModule,
+    PresupuestosModule,
+    AgentAuditModule,
   ],
   controllers: [ChatController, WhatsappController, TelegramController],
   providers: [ChatService, LlmService, PdfService, TelegramService],

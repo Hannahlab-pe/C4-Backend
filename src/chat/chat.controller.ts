@@ -37,6 +37,48 @@ export class ChatController {
     }
   }
 
+  /** Gate: el usuario CONFIRMA la acción de escritura pendiente → se ejecuta y se audita. */
+  @Post('confirmar')
+  async confirmar(
+    @Body() dto: { proyectoId: string },
+    @CurrentUser() user: any,
+    @Res() res: Response,
+  ): Promise<void> {
+    res.setHeader('Content-Type', 'text/event-stream')
+    res.setHeader('Cache-Control', 'no-cache')
+    res.setHeader('Connection', 'keep-alive')
+    res.setHeader('X-Accel-Buffering', 'no')
+    res.flushHeaders()
+    try {
+      await this.chat.resolverAccionWeb(dto.proyectoId, user, true, res)
+    } catch {
+      res.write(`event:error\ndata:${JSON.stringify({ message: 'Error al confirmar la acción' })}\n\n`)
+    } finally {
+      res.end()
+    }
+  }
+
+  /** Gate: el usuario CANCELA la acción pendiente → no se ejecuta nada. */
+  @Post('cancelar')
+  async cancelar(
+    @Body() dto: { proyectoId: string },
+    @CurrentUser() user: any,
+    @Res() res: Response,
+  ): Promise<void> {
+    res.setHeader('Content-Type', 'text/event-stream')
+    res.setHeader('Cache-Control', 'no-cache')
+    res.setHeader('Connection', 'keep-alive')
+    res.setHeader('X-Accel-Buffering', 'no')
+    res.flushHeaders()
+    try {
+      await this.chat.resolverAccionWeb(dto.proyectoId, user, false, res)
+    } catch {
+      res.write(`event:error\ndata:${JSON.stringify({ message: 'Error al cancelar la acción' })}\n\n`)
+    } finally {
+      res.end()
+    }
+  }
+
   @Get(':proyectoId/analisis')
   getAnalisis(@Param('proyectoId') proyectoId: string) {
     return this.chat.getAnalisisDb(proyectoId)

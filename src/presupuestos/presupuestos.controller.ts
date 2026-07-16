@@ -1,5 +1,7 @@
-import { Controller, Get, Post, Patch, Put, Delete, Param, Body, Query, UseGuards, HttpCode } from '@nestjs/common'
+import { Controller, Get, Post, Patch, Put, Delete, Param, Body, Query, UseGuards, HttpCode, Res, UseInterceptors, UploadedFile } from '@nestjs/common'
+import { FileInterceptor } from '@nestjs/platform-express'
 import { AuthGuard } from '@nestjs/passport'
+import type { Response } from 'express'
 import { CurrentUser } from '../decorators/current-user.decorator'
 import { PresupuestosService } from './presupuestos.service'
 
@@ -49,6 +51,20 @@ export class PresupuestosController {
     return this.svc.eliminarItem(itemId, u?.sub)
   }
 
+  // ── Import desde Excel: paso 1-2 (parseo + preview con matching, no escribe nada) ──
+  @Post('import/preview')
+  @UseInterceptors(FileInterceptor('archivo'))
+  previewImport(@UploadedFile() archivo: { buffer: Buffer }) {
+    if (!archivo?.buffer) return { error: 'No se recibió el archivo Excel.' }
+    return this.svc.previewImport(archivo.buffer)
+  }
+
+  /** Import paso 4: crea el presupuesto nuevo desde las filas confirmadas por el usuario. */
+  @Post('import/confirmar')
+  confirmarImport(@Body() body: any, @CurrentUser() u: JwtUser) {
+    return this.svc.confirmarImport(body, u?.sub)
+  }
+
   // ── Presupuestos ──
   @Get()
   listar(@Query('proyectoId') proyectoId: string) { return this.svc.listarPresupuestos(proyectoId) }
@@ -59,6 +75,15 @@ export class PresupuestosController {
   /** Árbol completo con parciales/subtotales/totales (la UI repinta en cascada). */
   @Get(':id')
   arbol(@Param('id') id: string) { return this.svc.calcularArbol(id) }
+
+  /** Exporta el presupuesto a Excel (Hoja Resumen, snapshots exactos). */
+  @Get(':id/export')
+  async exportar(@Param('id') id: string, @Res() res: Response) {
+    const { buffer, filename } = await this.svc.exportarExcel(id)
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`)
+    res.send(buffer)
+  }
 
   /** Recálculo explícito: refresca los snapshots desde los APU en vivo y devuelve el árbol. */
   @Post(':id/recalcular')

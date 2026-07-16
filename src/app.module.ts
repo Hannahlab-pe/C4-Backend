@@ -21,6 +21,7 @@ import { RegistrosFaseModule } from './registros-fase/registros-fase.module'
 import { DocumentosRequeridosModule } from './documentos-requeridos/documentos-requeridos.module'
 import { PartidasCatalogoModule } from './partidas-catalogo/partidas-catalogo.module'
 import { PresupuestosModule } from './presupuestos/presupuestos.module'
+import { AgentAuditModule } from './audit/agent-audit.module'
 
 import { Usuario } from './entities/usuario.entity'
 import { Proyecto } from './entities/proyecto.entity'
@@ -57,6 +58,7 @@ import { FormulaPolinomica } from './entities/formula-polinomica.entity'
 import { IndiceUnificado } from './entities/indice-unificado.entity'
 import { AdicionalDeductivo } from './entities/adicional-deductivo.entity'
 import { AuditLog } from './entities/audit-log.entity'
+import { AgentAuditLog } from './audit/agent-audit-log.entity'
 
 const entities = [
   Usuario, Proyecto, ProyectoUsuario, Sesion, Mensaje,
@@ -67,6 +69,8 @@ const entities = [
   // Presupuestos y Costos
   Recurso, RecursoPrecio, Partida, ApuLineaEntity, Presupuesto, PresupuestoItem,
   FormulaPolinomica, IndiceUnificado, AdicionalDeductivo, AuditLog,
+  // Auditoría transversal de IA
+  AgentAuditLog,
 ]
 
 @Module({
@@ -110,6 +114,7 @@ const entities = [
     DocumentosRequeridosModule,
     PartidasCatalogoModule,
     PresupuestosModule,
+    AgentAuditModule,
   ],
   controllers: [AppController],
   providers: [AppService, SeedService],
