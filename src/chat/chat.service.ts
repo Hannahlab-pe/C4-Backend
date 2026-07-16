@@ -1651,21 +1651,9 @@ const C4_TOOLS: LlmTool[] = [
       parameters: { type: 'object', properties: {} },
     },
   },
-  {
-    type: 'function',
-    function: {
-      name: 'cargar_obra_completa',
-      description: 'INSERTA TODA LA OBRA desde el Excel que el usuario ACABA de subir en este chat: parsea el archivo server-side y carga TODAS las partidas (organizadas en etapas por fase, con metrado y precio) y TODA la nómina de personal (nombre, DNI, cargo, cuadrilla, jornal). Es la forma FIABLE de "insertar/cargar todo": NO transcribes tú las partidas ni los trabajadores — el sistema lee el Excel completo (evita que se te queden partidas o gente afuera). Úsala cuando el usuario suba un Excel de obra/presupuesto y confirme que quiere cargar/insertar todo. Si le pasas fecha_inicio, además arma el cronograma. Solo funciona con el Excel recién subido en el chat.',
-      parameters: {
-        type: 'object',
-        properties: {
-          fecha_inicio: { type: 'string', description: 'Fecha de inicio de obra YYYY-MM-DD. Si la das, además arma el cronograma. Opcional.' },
-          dias_semana: { type: 'number', description: 'Jornada: días trabajados por semana (default 6). Opcional.' },
-          frentes: { type: 'number', description: 'N° de frentes/cuadrillas en paralelo (default 1). Opcional.' },
-        },
-      },
-    },
-  },
+  // ⛔ CONGELADA (PASO 0 · 2026-07-16 10:00 -05:00): 'cargar_obra_completa' se SACÓ del set de tools.
+  //    Motivo: alto radio de impacto (creaba decenas/cientos de registros + planilla + cronograma en una
+  //    sola invocación del modelo, SIN confirmación ni auditoría). Reactivar en el PASO 3 detrás del gate.
   {
     type: 'function',
     function: {
@@ -1767,6 +1755,8 @@ const ETAPAS_TEMPLATE: Record<string, { key: string; nombre: string; descripcion
 export class ChatService {
   private readonly logger = new Logger(ChatService.name)
 
+  /** Tools de escritura CONGELADAS (Paso 0, 2026-07-16): el dispatch las bloquea aunque el modelo las invoque. */
+  private readonly TOOLS_CONGELADAS = new Set<string>(['cargar_obra_completa'])
   private readonly analisisPorProyecto = new Map<string, any>()
   private readonly planoPorProyecto    = new Map<string, Buffer>()
   private readonly whatsappHist        = new Map<string, LlmMessage[]>() // memoria por número (canal WhatsApp)
@@ -2641,7 +2631,11 @@ export class ChatService {
     if (name === 'crear_vaciados') return this.toolCrearVaciados(args, res, proyectoId)
     if (name === 'actualizar_actividades') return this.toolActualizarActividades(args, res, proyectoId)
     if (name === 'crear_productividad') return this.toolCrearProductividad(args, res, proyectoId)
-    if (name === 'cargar_obra_completa') return this.toolCargarObraCompleta(args, res, proyectoId)
+    // ⛔ CONGELADA (PASO 0): fuera del set de tools + dispatch neutralizado. Reactivar quitándola de TOOLS_CONGELADAS.
+    if (name === 'cargar_obra_completa') {
+      if (this.TOOLS_CONGELADAS.has(name)) return { error: 'cargar_obra_completa está DESHABILITADA (requiere confirmación explícita del usuario). No la invoques.' }
+      return this.toolCargarObraCompleta(args, res, proyectoId)
+    }
     if (name === 'asignar_cuadrillas') return this.toolAsignarCuadrillas(args, res, proyectoId)
     if (name === 'agregar_trabajadores') return this.toolAgregarTrabajadores(args, res, proyectoId)
     if (name === 'buscar_partidas') return this.toolBuscarPartidas(args)
