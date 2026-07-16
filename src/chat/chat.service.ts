@@ -92,6 +92,32 @@ Cuando reportes un número sacado de un plano o documento (área, cota, nivel N.
 - COHERENCIA: si ya diste un número para un dato, no lo cambies en otra respuesta salvo que tengas una fuente nueva. Si dos lecturas del mismo documento no coinciden, admítelo y pide confirmación en vez de elegir una al azar.
 
 ════════════════════════════════════════════
+PRESUPUESTO DESDE PLANOS — 3 MODOS (regla dura, no negociable)
+════════════════════════════════════════════
+ALCANCE: "arma un presupuesto" de una casa/edificación = el presupuesto de OBRA GRIS / CASCO completo (obras provisionales, cimentación, estructura, MUROS, losas, instalaciones básicas), con sus partidas, metrados y precios. NO es el metrado de excavación (eso es un pedido aparte). NUNCA conviertas un pedido de "presupuesto de la casa" en un cálculo de volumen de excavación/zapatas — si te dan un plano estructural y piden el presupuesto, arma el CASCO, no te vayas a la excavación.
+
+Cuando el usuario suba planos y pida armar/estimar un presupuesto, para CADA partida o cantidad operas en UNO de tres modos, y SIEMPRE dices explícitamente en cuál estás:
+
+• CONFÍA — LEES el dato claro en el plano (ej. "cuadro de columnas: C4 = 8 varillas Ø5/8", f'c=210, acero fy=4200) Y el precio existe en el catálogo de recursos → propónlo directo, citando de dónde lo sacaste.
+• PREGUNTA — falta un dato crítico: el precio NO está en el catálogo, o el plano usa un SISTEMA CONSTRUCTIVO no convencional (prefabricado, Doppel, u otro que el catálogo no contempla) → DETENTE y pregúntale al usuario, con opciones concretas. NO sigas asumiendo un valor.
+• MARCA INCIERTO — el dato está en el plano pero la lectura NO es confiable (cota borrosa, o un metrado que exige sumar decenas de segmentos irregulares — ej. área de muros por tramos de altura variable) → inclúyelo con la etiqueta explícita "estimado, baja confianza — verificar". Nunca como dato firme.
+
+PROHIBIDO ABSOLUTO: rellenar un hueco con un valor plausible SIN decir que lo hiciste. Es PEOR que no responder — es una respuesta que parece confiable y no lo es. Error real a evitar: leer un muro y escribir "muros de albañilería (se asume)" o asumir concreto convencional cuando NO leíste el sistema. Si no puedes leer el sistema del muro con certeza, PREGUNTA — no asumas.
+
+CASO REAL DE CALIBRACIÓN (muros Doppel): si el plano dice "MURO DOPPEL" (o cualquier prefabricado), su precio — suministro (S/ x por m²) + colocación (S/ y por m²) — es del PROVEEDOR (ej. Beton Decken); NUNCA está en el plano ni en un catálogo estándar de concreto. Entonces tu PRIMERA pregunta al usuario DEBE ser ese precio: "Veo muros Doppel; no tengo su precio en el catálogo — ¿cuánto es el suministro y la colocación por m², o uso un genérico avisándote que no será preciso?". PROHIBIDO estimarlo como muro de concreto/albañilería. Y NO te distraigas con excavación/volumen/zapatas si te piden el presupuesto de la CASA: primero identifica el sistema y consigue sus precios (preguntando lo que no tengas en catálogo), LUEGO el resto de partidas.
+
+FLUJO OBLIGATORIO con planos para presupuesto:
+ORDEN OBLIGATORIO DE TU RESPUESTA: ante planos + "arma un presupuesto", tu PRIMERA respuesta NO describe ejes/columnas ni calcula volumen de excavación. ABRE con: (a) el sistema que leíste, y (b) las PREGUNTAS por lo que no tienes en catálogo (precio del Doppel/prefabricado) y los rubros de gestión. Solo DESPUÉS de que el usuario responda esas preguntas sigues con el resto del presupuesto. Nada de "procedo a estimar" hasta resolver los precios faltantes.
+1) PRIMER VISTAZO — identifica el SISTEMA leyendo LITERALMENTE las etiquetas de muros/losas del plano (ej. "MURO DOPPEL", "prelosa", "losa aligerada"), NO asumiendo. Si el sistema es prefabricado/no convencional (Doppel, etc.) y NO tienes ese precio en el catálogo → PREGUNTA antes de seguir: "Veo que usa muros Doppel/prefabricados; no tengo ese precio en el catálogo — ¿me lo das, o uso una partida genérica de referencia (avisándote que no será precisa)?"
+2) PROPÓN CON CONFIANZA solo lo que lees bien: cuadro de columnas (conteo + Ø de acero por tipo), f'c por elemento, y toda tabla explícita del plano.
+3) METRADOS GEOMÉTRICOS FINOS (área de muros por segmentos de altura variable, etc.): si el plano NO trae una tabla de metrados ya resuelta, NO asumas que puedes leerlo con precisión — pregunta o márcalo "estimado, baja confianza". Es lo más difícil de leer de un PDF; no lo trates como fácil.
+4) RUBROS DE GESTIÓN (caseta de obra, EPP, alquiler de grúa, transporte de equipos): casi nunca están en el plano → PREGUNTA si usa los valores estándar de su catálogo/histórico o los ingresa él.
+5) RESUMEN ANTES DE GENERAR: muestra "esto es lo que voy a usar (con su fuente)" y "esto es lo que NO sé y necesito que confirmes". El usuario responde esas preguntas en el chat.
+6) Recién DESPUÉS de esa ronda generas el presupuesto — BORRADOR ESTIMADO POR IA, SEPARADO del real (cargar_presupuesto con estimado_ia:true), por el gate de confirmación. En CADA partida declara su "fuente" (plano/usuario/catalogo/estimado) y "confianza" (alta/baja). OJO: el sistema BLOQUEA por código generar un prefabricado (Doppel/prelosa) con precio que NO sea del usuario o del catálogo — si no le preguntaste el precio del Doppel al usuario, NO vas a poder generar: pregúntaselo primero (fuente:"usuario"). NUNCA sobrescribes uno existente.
+
+Las preguntas de esta ronda son diálogo normal (no pasan por el gate). Lo que SÍ pasa por el gate es la creación real del presupuesto. Si corres en un canal sin espera de respuesta y no puedes preguntar, marca esa partida como incierta y sigue — NUNCA inventes en silencio para "completar".
+
+════════════════════════════════════════════
 FOCO Y ESTILO — REGLA IMPORTANTE
 ════════════════════════════════════════════
 - Responde SOLO a lo que el usuario pide en su mensaje ACTUAL. Haz la acción pedida y responde corto y al punto.
@@ -1685,10 +1711,13 @@ const C4_TOOLS: LlmTool[] = [
                 unidad: { type: 'string', description: 'Unidad de metrado: m2 | m3 | und | ml | kg | glb… Opcional.' },
                 cantidad: { type: 'number', description: 'Metrado (cantidad). Opcional.' },
                 precio: { type: 'number', description: 'Precio unitario. Opcional.' },
+                fuente: { type: 'string', enum: ['plano', 'usuario', 'catalogo', 'estimado'], description: 'De dónde salió el DATO/precio: "plano" (leído del plano), "usuario" (te lo dio el usuario, ej. el precio del Doppel), "catalogo" (del catálogo de recursos), "estimado" (lo estimaste = baja confianza). OBLIGATORIO cuando estimado_ia:true.' },
+                confianza: { type: 'string', enum: ['alta', 'baja'], description: 'alta = dato firme leído/dado; baja = estimado o lectura no confiable (ej. metrado de muros por segmentos). Marca baja donde no estés seguro.' },
               },
               required: ['nombre'],
             },
           },
+          estimado_ia: { type: 'boolean', description: 'true si es un BORRADOR estimado por IA leyendo PLANOS (no un Excel del usuario). Marca las partidas como borrador separado (origen estimado_ia). Úsalo al armar el presupuesto desde planos, tras la ronda de preguntas de los 3 modos.' },
         },
         required: ['fase', 'partidas'],
       },
@@ -4540,6 +4569,17 @@ export class ChatService {
     if (!INIT_ESTADO[fase]) return { error: 'Fase inválida. Usa: ' + Object.keys(INIT_ESTADO).join(', ') }
     const partidas: any[] = (args.partidas ?? []).filter((p: any) => p?.nombre && String(p.nombre).trim())
     if (!partidas.length) return { error: 'No hay partidas para cargar en esta fase.' }
+    // GUARDRAIL estimado_ia: NUNCA generar un prefabricado (Doppel/prelosa) con precio inventado o "leído del plano".
+    // Su precio es de PROVEEDOR (suministro + colocación por m²) — debe venir del usuario o del catálogo. Bloquea y obliga a preguntar.
+    if (args.estimado_ia === true) {
+      const prefabInventado = partidas.filter((p: any) =>
+        /doppel|prefabric|prelosa/i.test(String(p?.nombre)) &&
+        Number(p?.precio) > 0 &&
+        !['usuario', 'catalogo'].includes(String(p?.fuente)))
+      if (prefabInventado.length) {
+        return { error: `No genero el presupuesto: estas partidas de sistema PREFABRICADO tienen precio estimado/de plano, NO del usuario ni del catálogo: "${prefabInventado.map((p: any) => p.nombre).join('", "')}". El precio de un prefabricado (Doppel = suministro + colocación por m²) es de PROVEEDOR y jamás está en el plano. PREGÚNTASELO al usuario y reintenta con fuente:"usuario". Prohibido inventar ese precio.` }
+      }
+    }
     const slug = (s: string) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30) || 'general'
     try {
       res.write(`event:status\ndata:${JSON.stringify({ step: `Cargando ${partidas.length} partidas del presupuesto en ${fase}...`, icon: 'check' })}\n\n`)
@@ -4568,7 +4608,8 @@ export class ChatService {
           datos: {
             unidad: p.unidad ? String(p.unidad).trim().slice(0, 20) : undefined,
             cantidad, precioUnitario: precio, etapa: etapaKey,
-            origen: 'presupuesto',
+            origen: args.estimado_ia === true ? 'estimado_ia' : 'presupuesto',
+            ...(args.estimado_ia === true ? { fuente: p.fuente, confianza: p.confianza } : {}),
           },
         })
         total++
