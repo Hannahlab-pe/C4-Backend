@@ -106,6 +106,8 @@ PROHIBIDO ABSOLUTO: rellenar un hueco con un valor plausible SIN decir que lo hi
 
 CASO REAL DE CALIBRACIÓN (muros Doppel): si el plano dice "MURO DOPPEL" (o cualquier prefabricado), su precio — suministro (S/ x por m²) + colocación (S/ y por m²) — es del PROVEEDOR (ej. Beton Decken); NUNCA está en el plano ni en un catálogo estándar de concreto. Entonces tu PRIMERA pregunta al usuario DEBE ser ese precio: "Veo muros Doppel; no tengo su precio en el catálogo — ¿cuánto es el suministro y la colocación por m², o uso un genérico avisándote que no será preciso?". PROHIBIDO estimarlo como muro de concreto/albañilería. Y NO te distraigas con excavación/volumen/zapatas si te piden el presupuesto de la CASA: primero identifica el sistema y consigue sus precios (preguntando lo que no tengas en catálogo), LUEGO el resto de partidas.
 
+ARITMÉTICA — NO la hagas tú: NUNCA presentes en el chat un parcial (precio × metrado) ni un total/subtotal calculado por ti — tu aritmética mental NO es confiable (te equivocas por decenas de soles y lo muestras como si fuera exacto). Da el precio unitario y el metrado de cada partida, pero el PARCIAL y el TOTAL los calcula el SISTEMA por código (motor decimal): al llamar cargar_presupuesto, la herramienta te devuelve el monto real. Muestra ESE número, nunca uno que calcules tú. Si el usuario pide el total antes de cargar, dile "lo vas a ver calculado exacto en el presupuesto cuando lo cargue" — no inventes la cuenta.
+
 FLUJO OBLIGATORIO con planos para presupuesto:
 ORDEN OBLIGATORIO DE TU RESPUESTA: ante planos + "arma un presupuesto", tu PRIMERA respuesta NO describe ejes/columnas ni calcula volumen de excavación. ABRE con: (a) el sistema que leíste, y (b) las PREGUNTAS por lo que no tienes en catálogo (precio del Doppel/prefabricado) y los rubros de gestión. Solo DESPUÉS de que el usuario responda esas preguntas sigues con el resto del presupuesto. Nada de "procedo a estimar" hasta resolver los precios faltantes.
 1) PRIMER VISTAZO — identifica el SISTEMA leyendo LITERALMENTE las etiquetas de muros/losas del plano (ej. "MURO DOPPEL", "prelosa", "losa aligerada"), NO asumiendo. Si el sistema es prefabricado/no convencional (Doppel, etc.) y NO tienes ese precio en el catálogo → PREGUNTA antes de seguir: "Veo que usa muros Doppel/prefabricados; no tengo ese precio en el catálogo — ¿me lo das, o uso una partida genérica de referencia (avisándote que no será precisa)?"
@@ -2188,6 +2190,23 @@ export class ChatService {
       } catch (e: any) { this.logger.warn(`No se pudo persistir adjunto: ${e?.message}`) }
     }
 
+    // Persistir cada adjunto MÚLTIPLE (ej. 3 planos subidos juntos)
+    if (dto.archivos?.length) {
+      for (const a of dto.archivos) {
+        if (!a?.base64) continue
+        const nombreAdj = a.nombre ?? 'adjunto'
+        const mime = a.tipo || (
+          /\.dxf$/i.test(nombreAdj) ? 'application/dxf' :
+          /\.pdf$/i.test(nombreAdj) ? 'application/pdf' :
+          /\.(xlsx|xls)$/i.test(nombreAdj) ? 'application/vnd.ms-excel' :
+          /\.(png|jpe?g|webp)$/i.test(nombreAdj) ? 'image/png' :
+          'application/octet-stream'
+        )
+        try { await this.documentos.subir({ proyectoId: dto.proyectoId, nombre: nombreAdj, mimeType: mime, base64: a.base64 }) }
+        catch (e: any) { this.logger.warn(`No se pudo persistir adjunto múltiple: ${e?.message}`) }
+      }
+    }
+
     const history = await this.mensajeRepo.find({
       where: { sesionId: sesion.id },
       order: { createdAt: 'ASC' },
@@ -2581,7 +2600,37 @@ export class ChatService {
 
   // ─── Construcción de contenido de usuario con archivo ────────────────────────
 
+  /** Varios adjuntos (ej. 3 planos) → todos a visión en un mismo mensaje. */
+  private async buildUserContentMulti(dto: StreamChatDto): Promise<string | LlmContentPart[]> {
+    const archivos = (dto.archivos ?? []).filter((a) => a?.base64)
+    if (!archivos.length) return this.buildUserContent({ ...dto, archivos: undefined })
+    if (archivos.length === 1) {
+      const a = archivos[0]
+      return this.buildUserContent({ ...dto, archivos: undefined, archivoBase64: a.base64, archivoNombre: a.nombre, archivoTipo: a.tipo })
+    }
+    const parts: LlmContentPart[] = []
+    const textos: string[] = []
+    for (const a of archivos.slice(0, 6)) {
+      const tipo = (a.tipo ?? '').toLowerCase(); const nombre = (a.nombre ?? '').toLowerCase()
+      try {
+        if (tipo.startsWith('image/')) {
+          parts.push({ type: 'image_url', image_url: { url: `data:${a.tipo};base64,${a.base64}` } })
+        } else if (tipo === 'application/pdf' || nombre.endsWith('.pdf')) {
+          const buffer = Buffer.from(a.base64, 'base64')
+          const parsed = await this.parsePdfFull(buffer)
+          if (parsed.text?.trim()) textos.push(`[${a.nombre ?? 'plano.pdf'}]:\n${parsed.text.slice(0, 4000)}`)
+          const img = parsed.numpages <= 5 ? await this.renderPdfPrimeraPagina(buffer) : null
+          if (img) parts.push({ type: 'image_url', image_url: { url: img, detail: 'high' } })
+        }
+      } catch (e: any) { this.logger.error(`multi adjunto "${a.nombre}": ${e?.message}`) }
+    }
+    const guia = `${dto.mensaje || 'Te paso varios documentos.'}\n\n---\nTe paso ${archivos.length} archivos (planos/imágenes), abajo como imágenes + su texto. LÉELOS JUNTOS: identifica el SISTEMA constructivo por sus etiquetas (ej. "MURO DOPPEL", "prelosa") — LEE, no asumas — el cuadro de columnas, y toda tabla explícita. Úsalo para lo que el usuario PIDE: si pide el PRESUPUESTO, arma el casco, propón partidas y PREGUNTA los precios que no estén en catálogo (no inventes ni asumas).${textos.length ? '\n\nTexto extraído:\n' + textos.join('\n\n') : ''}`
+    if (!parts.length) return guia
+    return [{ type: 'text', text: guia }, ...parts]
+  }
+
   private async buildUserContent(dto: StreamChatDto): Promise<string | LlmContentPart[]> {
+    if (dto.archivos?.length) return this.buildUserContentMulti(dto)
     this.logger.log(`buildUserContent: adjunto="${dto.archivoNombre ?? '(sin nombre)'}" tipo="${dto.archivoTipo ?? '(sin tipo)'}" base64_len=${dto.archivoBase64?.length ?? 0}`)
     if (!dto.archivoBase64) return dto.mensaje
 
@@ -2625,7 +2674,7 @@ export class ChatService {
         const parsed = await this.parsePdfFull(buffer)
         const texto = parsed.text.slice(0, 8000)
         const planoImg = parsed.numpages <= 5 ? await this.renderPdfPrimeraPagina(buffer) : null
-        const txt = `${dto.mensaje || 'Te paso un documento.'}\n\n---\nDocumento adjunto: ${dto.archivoNombre ?? 'documento.pdf'}.${planoImg ? ' Te lo paso TAMBIÉN como imagen: si es un plano, describe lo que VES en el dibujo (ejes, luces, elementos). Si es un plano de CIMENTACIÓN con niveles, junta la imagen (qué sector es cada nivel) con el texto (N.P.T./N.F.Z./H) para armar el VOLUMEN de excavación por niveles (calcular_volumen_excavacion, parámetro "sectores") + la sobre-excavación de zapatas; si te falta el área de un sector, dilo con honestidad.' : ''}\nTexto extraído:\n${texto}`
+        const txt = `${dto.mensaje || 'Te paso un documento.'}\n\n---\nDocumento adjunto: ${dto.archivoNombre ?? 'documento.pdf'}.${planoImg ? ' Te lo paso TAMBIÉN como imagen: si es un plano, LEE lo que VES en el dibujo (ejes, luces, elementos, y sobre todo el SISTEMA constructivo — etiquetas de muros/losas, ej. "MURO DOPPEL", "prelosa"). Úsalo para lo que el usuario PIDE: si pide el PRESUPUESTO, arma el casco (identifica el sistema, propón partidas, y PREGUNTA los precios que no estén en catálogo — no asumas ni inventes); si pide el VOLUMEN de excavación, junta la imagen con los niveles del texto (N.P.T./N.F.Z./H) para calcular_volumen_excavacion. No presumas que es excavación si te piden un presupuesto.' : ''}\nTexto extraído:\n${texto}`
         if (planoImg) {
           return [
             { type: 'text', text: txt },

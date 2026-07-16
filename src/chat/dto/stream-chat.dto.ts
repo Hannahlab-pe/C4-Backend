@@ -1,4 +1,4 @@
-import { IsString, IsUUID, IsOptional } from 'class-validator'
+import { IsString, IsUUID, IsOptional, IsArray } from 'class-validator'
 
 export class StreamChatDto {
   @IsUUID()
@@ -9,7 +9,7 @@ export class StreamChatDto {
 
   @IsOptional()
   @IsString()
-  archivoBase64?: string  // base64 del archivo
+  archivoBase64?: string  // base64 del archivo (single — compat)
 
   @IsOptional()
   @IsString()
@@ -18,6 +18,10 @@ export class StreamChatDto {
   @IsOptional()
   @IsString()
   archivoTipo?: string  // 'pdf' | 'image/jpeg' | 'image/png' | etc.
+
+  @IsOptional()
+  @IsArray()
+  archivos?: { base64: string; nombre?: string; tipo?: string }[]  // varios adjuntos (ej. 3 planos)
 
   @IsOptional()
   @IsString()
