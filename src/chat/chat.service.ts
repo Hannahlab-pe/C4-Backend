@@ -2501,6 +2501,12 @@ export class ChatService {
     const contextoDocumentos = seleccionado ? await this.documentos.getContextoRelevante(proyectoId, message ?? '').catch(() => '') : ''
     const contextoFichas = seleccionado ? await this.contextoFichasExcavacion(proyectoId).catch(() => '') : ''
     const estadoProyecto = seleccionado ? await this.resumenProyecto(proyectoId).catch(() => '') : ''
+    // Nombre del proyecto ACTIVO (no hardcodear): si el jefe eligió uno, usa su nombre REAL.
+    let proyNombreLinea = 'Aún no tienes un proyecto seleccionado en este chat (pregúntale al jefe en cuál trabajar).'
+    if (seleccionado) {
+      const pSel = (await this.proyectosDelJefe().catch(() => [] as { id: string; nombre: string; distrito?: string }[])).find((x) => x.id === proyectoId)
+      proyNombreLinea = pSel ? `Gestionas el proyecto "${pSel.nombre}"${pSel.distrito ? ` (${pSel.distrito})` : ''}.` : 'Gestionas el proyecto activo del jefe.'
+    }
 
     // Sin proyecto elegido → el bot primero pregunta en cuál trabajar.
     let seleccionContext = ''
@@ -2516,7 +2522,7 @@ export class ChatService {
     }
     const notaWhatsapp =
       `\n\n---\n## CANAL: CHAT (WhatsApp / Telegram)\n` +
-      `Respondes por chat a ${userName || 'un usuario de obra'}. Gestionas el proyecto "Residencial Sáenz Peña" (Barranco).\n` +
+      `Respondes por chat a ${userName || 'un usuario de obra'}. ${proyNombreLinea}\n` +
       `- Sé BREVE y directo (2 a 6 líneas). Texto plano: NADA de tablas ni de asteriscos dobles (**) para negrita (no se renderizan bien). Como mucho viñetas con "•".\n` +
       `- ACCIÓN DIRECTA (importante): cuando te pidan crear una etapa, agregar o marcar una actividad, consultar normativa, etc., LLAMA la herramienta correspondiente DE INMEDIATO en este mismo turno. NO propongas, NO pidas confirmación, NO preguntes "¿te gustaría incluir actividades?" — por WhatsApp el usuario quiere que lo hagas YA. Si faltan detalles, usa valores por defecto razonables (ej. 1-2 actividades lógicas). Ignora cualquier paso de "proponer y luego confirmar" de otros modos.\n` +
       `- FASE CORRECTA (crítico): al crear una etapa o actividad, identifica la FASE que menciona el usuario (demolicion, excavacion, construccion, acabados, administracion) y pásala EXACTA a la herramienta (parámetro "fase"). NUNCA asumas "demolicion" por defecto: si el usuario dice "excavación", créala en excavacion; si dice "acabados", en acabados. Respeta también el NOMBRE exacto que pidió el usuario para la etapa.\n` +
