@@ -256,18 +256,19 @@ export class PresupuestosService {
     wb.creator = 'C4 — Presupuestos y Costos'
     const ws = wb.addWorksheet('Resumen', { views: [{ state: 'frozen', ySplit: 5 }] })
     ws.columns = [
-      { key: 'codigo', width: 12 }, { key: 'descripcion', width: 58 }, { key: 'und', width: 8 },
-      { key: 'metrado', width: 14 }, { key: 'pu', width: 14 }, { key: 'parcial', width: 17 },
+      { key: 'codigo', width: 12 }, { key: 'descripcion', width: 52 }, { key: 'und', width: 8 },
+      { key: 'metrado', width: 12 }, { key: 'mo', width: 12 }, { key: 'mat', width: 12 },
+      { key: 'pu', width: 13 }, { key: 'parcial', width: 16 },
     ]
 
     // Cabecera del documento
-    ws.mergeCells('A1:F1'); ws.getCell('A1').value = p.nombre; ws.getCell('A1').font = { bold: true, size: 14 }
-    ws.mergeCells('A2:F2'); ws.getCell('A2').value = `Tipo: ${p.tipo.toUpperCase()}  ·  Moneda: ${p.moneda}`
+    ws.mergeCells('A1:H1'); ws.getCell('A1').value = p.nombre; ws.getCell('A1').font = { bold: true, size: 14 }
+    ws.mergeCells('A2:H2'); ws.getCell('A2').value = `Tipo: ${p.tipo.toUpperCase()}  ·  Moneda: ${p.moneda}`
     ws.getCell('A2').font = { size: 10, color: { argb: 'FF64748B' } }
 
     // Encabezados de columna (fila 5)
     const head = ws.getRow(5)
-    head.values = ['Código', 'Descripción', 'Und', 'Metrado', 'P.U. (S/)', 'Parcial (S/)']
+    head.values = ['Código', 'Descripción', 'Und', 'Metrado', 'M.O (S/)', 'MAT (S/)', 'P.U. (S/)', 'Parcial (S/)']
     head.eachCell((c) => {
       c.font = { bold: true, color: { argb: 'FFFFFFFF' } }
       c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } }
@@ -277,16 +278,19 @@ export class PresupuestosService {
     const NUM = '#,##0.00'
     for (const { it, depth } of filas) {
       const esTitulo = it.tipo === 'titulo'
+      const gen = it.porGenericoSnapshot
       const row = ws.addRow({
         codigo: it.codigo || '',
         descripcion: it.descripcion || '',
         und: esTitulo ? '' : (unidadDe.get(it.partidaId as string) ?? ''),
         metrado: esTitulo ? null : n(it.metrado),
+        mo: esTitulo || !gen || gen.MO == null ? null : n(gen.MO),
+        mat: esTitulo || !gen || gen.MAT == null ? null : n(gen.MAT),
         pu: esTitulo ? null : n(it.costoUnitarioSnapshot),
         parcial: esTitulo ? (arbol.subtotales[it.id] ?? 0) : (arbol.parciales[it.id] ?? 0),
       })
       row.getCell('descripcion').alignment = { indent: depth }
-      for (const k of ['metrado', 'pu', 'parcial']) row.getCell(k).numFmt = NUM
+      for (const k of ['metrado', 'mo', 'mat', 'pu', 'parcial']) row.getCell(k).numFmt = NUM
       if (esTitulo) {
         row.font = { bold: true }
         row.eachCell((c) => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } } })
@@ -304,7 +308,7 @@ export class PresupuestosService {
     ]
     for (const [label, val, esTotal] of totales) {
       const row = ws.addRow({ codigo: label, parcial: val })
-      ws.mergeCells(row.number, 1, row.number, 5)
+      ws.mergeCells(row.number, 1, row.number, 7)
       row.getCell(1).alignment = { horizontal: 'right' }
       row.getCell(1).font = { bold: !!esTotal || label === 'COSTO DIRECTO' || label === 'SUBTOTAL', size: esTotal ? 12 : 11 }
       row.getCell('parcial').numFmt = NUM
@@ -400,7 +404,7 @@ export class PresupuestosService {
    */
   async crearEstimadoIa(dto: {
     proyectoId: string; nombre?: string; ggPorcentaje?: number; utilidadPorcentaje?: number; igvPorcentaje?: number
-    partidas: { capitulo?: string; descripcion: string; unidad?: string; metrado?: number; precio?: number; confianza?: string }[]
+    partidas: { capitulo?: string; descripcion: string; unidad?: string; metrado?: number; precio?: number; mano_obra?: number; material?: number; confianza?: string }[]
   }, usuarioId?: string) {
     if (!dto?.proyectoId) throw new BadRequestException('Falta el proyecto.')
     const partidas = (dto.partidas ?? []).filter((p) => p?.descripcion && String(p.descripcion).trim())
@@ -426,11 +430,18 @@ export class PresupuestosService {
       }))
       for (const p of porCap.get(cap)!) {
         const baja = String(p.confianza) === 'baja'
+        const mo = p.mano_obra != null && !isNaN(Number(p.mano_obra)) ? Number(p.mano_obra) : null
+        const mat = p.material != null && !isNaN(Number(p.material)) ? Number(p.material) : null
+        // Si viene el desglose mano de obra / material, el P.U. es su suma; si no, el precio combinado.
+        const precio = (mo != null || mat != null)
+          ? Math.round(((mo ?? 0) + (mat ?? 0)) * 100) / 100
+          : (p.precio != null && !isNaN(Number(p.precio)) ? Number(p.precio) : null)
         await this.items.save(this.items.create({
           presupuestoId: pres.id, parentId: titulo.id, tipo: 'partida', partidaId: null, codigo: '',
           descripcion: String(p.descripcion).trim().slice(0, 220) + (baja ? '  (estimado, baja confianza — verificar)' : ''),
           metrado: p.metrado != null && !isNaN(Number(p.metrado)) ? String(Number(p.metrado)) : null,
-          costoUnitarioSnapshot: p.precio != null && !isNaN(Number(p.precio)) ? String(Number(p.precio)) : null,
+          costoUnitarioSnapshot: precio != null ? String(precio) : null,
+          porGenericoSnapshot: (mo != null || mat != null) ? { MO: mo ?? 0, MAT: mat ?? 0, EQP: 0, SUB: 0 } : null,
           orden: orden++,
         }))
       }
