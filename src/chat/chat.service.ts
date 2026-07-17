@@ -2983,6 +2983,15 @@ export class ChatService {
       return
     }
     this.accionesPendientes.delete(clave)
+    // Deja registrada en el historial la decisión del usuario (confirmó/canceló), para que el chat sea auditable y se lea coherente (gate → decisión → resultado).
+    try {
+      const sesion = await this.getOrCreateSesion(proyectoId, user.id)
+      const label = this.resumirAcciones(pend.toolCalls).resumen || 'la acción'
+      await this.mensajeRepo.save(this.mensajeRepo.create({
+        sesionId: sesion.id, rol: 'confirmacion',
+        contenido: confirmado ? `✅ Confirmaste: ${label}` : `🚫 Cancelaste: ${label}`,
+      }))
+    } catch (e: any) { this.logger.warn(`No pude persistir la decisión de confirmación: ${e?.message}`) }
     const finalText = await this.ejecutarAccionPendiente(pend, res, confirmado, user?.id)
     if (finalText) {
       try {
