@@ -99,4 +99,27 @@ export class PresupuestosController {
   crearItem(@Param('id') id: string, @Body() body: any, @CurrentUser() u: JwtUser) {
     return this.svc.crearItem(id, body, u?.sub)
   }
+
+  // ── Valorizaciones (avance mensual para cobrar) ──
+  @Get(':id/valorizaciones')
+  listarValorizaciones(@Param('id') id: string) { return this.svc.listarValorizaciones(id) }
+
+  @Post(':id/valorizaciones')
+  crearValorizacion(@Param('id') id: string, @Body('periodo') periodo: string, @CurrentUser() u: JwtUser) {
+    return this.svc.crearValorizacion(id, periodo, u?.sub)
+  }
+
+  @Get('valorizaciones/:valId')
+  getValorizacion(@Param('valId') valId: string) { return this.svc.getValorizacion(valId) }
+
+  @Patch('valorizaciones/:valId/avance')
+  actualizarAvance(@Param('valId') valId: string, @Body() body: { itemId: string; pct: number }, @CurrentUser() u: JwtUser) {
+    return this.svc.actualizarAvance(valId, body?.itemId, body?.pct, u?.sub)
+  }
+
+  @Delete('valorizaciones/:valId')
+  @HttpCode(200)
+  eliminarValorizacion(@Param('valId') valId: string, @CurrentUser() u: JwtUser) {
+    return this.svc.eliminarValorizacion(valId, u?.sub)
+  }
 }

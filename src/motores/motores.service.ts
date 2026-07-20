@@ -54,6 +54,11 @@ export class MotoresService {
     return data
   }
 
+  async precioMaximoTerreno(payload: Record<string, any>): Promise<any> {
+    const { data } = await axios.post(`${this.baseUrl}/precio-maximo-terreno`, payload, { timeout: 15_000 })
+    return data
+  }
+
   async leerPlano(dxfBase64: string): Promise<any> {
     const { data } = await axios.post(`${this.baseUrl}/leer-plano`, { dxf_base64: dxfBase64 }, { timeout: 30_000 })
     return data

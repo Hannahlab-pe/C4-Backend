@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common'
+import { Injectable, BadRequestException, NotFoundException, OnModuleInit } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository } from 'typeorm'
 import * as ExcelJS from 'exceljs'
@@ -9,15 +9,17 @@ import { ApuLineaEntity } from '../entities/apu-linea.entity'
 import { Presupuesto } from '../entities/presupuesto.entity'
 import { PresupuestoItem } from '../entities/presupuesto-item.entity'
 import { AuditLog } from '../entities/audit-log.entity'
+import { Valorizacion } from '../entities/valorizacion.entity'
 import {
   calcularApu, calcularPresupuesto, CalcContext, ApuLinea, ItemDef, ApuResultado,
 } from './engine'
+import { D, money, n, Decimal } from './engine/precision'
 import { parseExcelPresupuesto } from './import/import-excel'
 import { matchPartida, CatalogoItem } from './import/matching'
 
 /** Servicio del módulo Presupuestos y Costos. Toda la lógica de negocio usa el motor puro. */
 @Injectable()
-export class PresupuestosService {
+export class PresupuestosService implements OnModuleInit {
   constructor(
     @InjectRepository(Recurso) private recursos: Repository<Recurso>,
     @InjectRepository(RecursoPrecio) private precios: Repository<RecursoPrecio>,
@@ -26,7 +28,48 @@ export class PresupuestosService {
     @InjectRepository(Presupuesto) private presupuestos: Repository<Presupuesto>,
     @InjectRepository(PresupuestoItem) private items: Repository<PresupuestoItem>,
     @InjectRepository(AuditLog) private auditLog: Repository<AuditLog>,
+    @InjectRepository(Valorizacion) private valorizaciones: Repository<Valorizacion>,
   ) {}
+
+  async onModuleInit() {
+    try { await this.seedBetondecken() } catch { /* no romper el arranque si falla el seed */ }
+  }
+
+  /**
+   * Siembra el catálogo de prefabricados Betondecken (sistema Doppel) como partidas del catálogo
+   * transversal, cada una con su APU = 1 subcontrato (suministro + montaje) por m². Los precios son
+   * REFERENCIALES y editables (fuente única = el recurso), para que se ajusten al precio real de Betondecken.
+   */
+  private async seedBetondecken() {
+    if (await this.recursos.findOne({ where: { codigo: 'BD-PRELOSA' } })) return
+
+    const recursosDef = [
+      { codigo: 'BD-PRELOSA',      nombre: 'Prelosa Doppel — suministro + montaje',             unidad: 'm2',  precioUnitario: '210.0000' },
+      { codigo: 'BD-PRELOSA-PRET', nombre: 'Prelosa pretensada Doppel — suministro + montaje',   unidad: 'm2',  precioUnitario: '235.0000' },
+      { codigo: 'BD-MURO',         nombre: 'Muro Doppel (Doppelwand) — suministro + montaje',    unidad: 'm2',  precioUnitario: '265.0000' },
+      { codigo: 'BD-ESCALERA',     nombre: 'Escalera prefabricada Doppel — sum. + montaje',      unidad: 'und', precioUnitario: '1850.0000' },
+    ]
+    const recursos = await this.recursos.save(recursosDef.map((r) => this.recursos.create({
+      codigo: r.codigo, nombre: r.nombre, tipo: 'SUB', familia: 'Betondecken', unidad: r.unidad, precioUnitario: r.precioUnitario, moneda: 'PEN', proyectoId: null,
+    })))
+    const recPorCodigo = new Map(recursos.map((r) => [r.codigo, r]))
+
+    const partidasDef = [
+      { codigo: 'BD.01', descripcion: 'Suministro e instalación de prelosa Doppel',              unidad: 'm2',  rec: 'BD-PRELOSA' },
+      { codigo: 'BD.02', descripcion: 'Suministro e instalación de prelosa pretensada Doppel',    unidad: 'm2',  rec: 'BD-PRELOSA-PRET' },
+      { codigo: 'BD.03', descripcion: 'Suministro e instalación de muro Doppel (Doppelwand)',     unidad: 'm2',  rec: 'BD-MURO' },
+      { codigo: 'BD.04', descripcion: 'Suministro e instalación de escalera prefabricada Doppel', unidad: 'und', rec: 'BD-ESCALERA' },
+    ]
+    for (const pd of partidasDef) {
+      const partida = await this.partidas.save(this.partidas.create({
+        codigo: pd.codigo, descripcion: pd.descripcion, unidad: pd.unidad, especialidad: 'Prefabricado (Betondecken)', esSubpartida: false, proyectoId: null,
+      }))
+      const rec = recPorCodigo.get(pd.rec)!
+      await this.apuLineas.save(this.apuLineas.create({
+        partidaId: partida.id, clase: 'SUB', refId: rec.id, cantidad: '1.0000', orden: 0,
+      }))
+    }
+  }
 
   // ── Auditoría: TODO cambio de precio/rendimiento/cantidad/metrado queda registrado ──
   private async audit(entidad: string, entidadId: string, campo: string, anterior: any, nuevo: any, usuarioId?: string) {
@@ -448,5 +491,135 @@ export class PresupuestosService {
     }
     await this.audit('presupuesto', pres.id, 'crear_estimado_ia', null, `${partidas.length} partidas · borrador IA desde planos`, usuarioId)
     return this.calcularArbol(pres.id)
+  }
+
+  // ══ Valorizaciones (avance mensual para cobrar contra el presupuesto) ══
+
+  listarValorizaciones(presupuestoId: string) {
+    return this.valorizaciones.find({ where: { presupuestoId }, order: { numero: 'ASC' } })
+  }
+
+  /** Crea una valorización nueva (período). Arranca del avance ACUMULADO de la anterior. */
+  async crearValorizacion(presupuestoId: string, periodo: string, usuarioId?: string) {
+    const p = await this.cabecera(presupuestoId)
+    const ultima = (await this.valorizaciones.find({ where: { presupuestoId }, order: { numero: 'DESC' }, take: 1 }))[0]
+    const numero = (ultima?.numero ?? 0) + 1
+    const val = await this.valorizaciones.save(this.valorizaciones.create({
+      proyectoId: p.proyectoId, presupuestoId, numero,
+      periodo: (periodo || '').trim() || `Valorización ${numero}`,
+      estado: 'borrador',
+      avances: { ...(ultima?.avances ?? {}) }, // continúa desde el acumulado anterior
+    }))
+    await this.audit('valorizacion', val.id, 'crear', null, val.periodo, usuarioId)
+    return this.calcularValorizacion(val)
+  }
+
+  async getValorizacion(valId: string) {
+    const val = await this.valorizaciones.findOne({ where: { id: valId } })
+    if (!val) throw new NotFoundException('Valorización no encontrada')
+    return this.calcularValorizacion(val)
+  }
+
+  /** Fija el % de avance ACUMULADO de una partida en una valorización y recalcula. */
+  async actualizarAvance(valId: string, itemId: string, pct: number, usuarioId?: string) {
+    const val = await this.valorizaciones.findOne({ where: { id: valId } })
+    if (!val) throw new NotFoundException('Valorización no encontrada')
+    const limpio = Math.min(100, Math.max(0, Number(pct) || 0))
+    val.avances = { ...(val.avances ?? {}), [itemId]: limpio }
+    await this.valorizaciones.save(val)
+    return this.calcularValorizacion(val)
+  }
+
+  async eliminarValorizacion(valId: string, usuarioId?: string) {
+    const val = await this.valorizaciones.findOne({ where: { id: valId } })
+    if (!val) return { ok: true }
+    const ultima = await this.valorizaciones.findOne({ where: { presupuestoId: val.presupuestoId }, order: { numero: 'DESC' } })
+    if (ultima && ultima.id !== val.id) throw new BadRequestException('Solo puedes eliminar la última valorización (para no romper el acumulado).')
+    await this.valorizaciones.delete({ id: valId })
+    await this.audit('valorizacion', valId, 'eliminar', val.periodo, null, usuarioId)
+    return { ok: true }
+  }
+
+  /**
+   * Calcula la valorización: por cada partida, valorizado acumulado = parcial × %avance; el del
+   * PERÍODO = acumulado − acumulado de la valorización anterior. GG/Ut/IGV se aplican proporcional
+   * al costo directo del período. Todo con el motor decimal (mismos snapshots que el presupuesto).
+   */
+  private async calcularValorizacion(val: Valorizacion) {
+    const arbol = await this.calcularArbol(val.presupuestoId)
+    const p = arbol.presupuesto
+    const prev = await this.valorizaciones.findOne({ where: { presupuestoId: val.presupuestoId, numero: val.numero - 1 } })
+    const prevAv = prev?.avances ?? {}
+    const av = val.avances ?? {}
+    const clamp = (x: any) => Math.min(100, Math.max(0, Number(x) || 0))
+
+    const valPer: Record<string, Decimal> = {}
+    const valAcu: Record<string, Decimal> = {}
+    let cdPeriodo = D(0), cdAcum = D(0)
+    for (const it of arbol.items) {
+      if (it.tipo !== 'partida') continue
+      const parcial = D(arbol.parciales[it.id] ?? 0)
+      const pctAcum = clamp(av[it.id])
+      const pctAnt = clamp(prevAv[it.id])
+      const vAcum = parcial.mul(pctAcum).div(100)
+      const vPer = parcial.mul(pctAcum - pctAnt).div(100)
+      valAcu[it.id] = vAcum; valPer[it.id] = vPer
+      cdPeriodo = cdPeriodo.add(vPer); cdAcum = cdAcum.add(vAcum)
+    }
+
+    // Subtotales de valorizado por título (suma recursiva de descendientes)
+    const childrenMap = new Map<string | null, typeof arbol.items>()
+    for (const it of arbol.items) {
+      const k = it.parentId ?? null
+      if (!childrenMap.has(k)) childrenMap.set(k, [])
+      childrenMap.get(k)!.push(it)
+    }
+    const sumTit = (id: string): { per: Decimal; acu: Decimal } => {
+      let per = D(0), acu = D(0)
+      for (const c of childrenMap.get(id) ?? []) {
+        if (c.tipo === 'partida') { per = per.add(valPer[c.id] ?? D(0)); acu = acu.add(valAcu[c.id] ?? D(0)) }
+        else { const s = sumTit(c.id); per = per.add(s.per); acu = acu.add(s.acu) }
+      }
+      return { per, acu }
+    }
+
+    const items = arbol.items.map((it) => {
+      const esPartida = it.tipo === 'partida'
+      const vPer = esPartida ? (valPer[it.id] ?? D(0)) : sumTit(it.id).per
+      const vAcu = esPartida ? (valAcu[it.id] ?? D(0)) : sumTit(it.id).acu
+      return {
+        id: it.id, parentId: it.parentId, tipo: it.tipo, codigo: it.codigo, descripcion: it.descripcion, orden: it.orden,
+        parcial: esPartida ? (arbol.parciales[it.id] ?? 0) : (arbol.subtotales[it.id] ?? 0),
+        pctAvance: esPartida ? clamp(av[it.id]) : null,
+        valorizadoAcum: n(money(vAcu)),
+        valorizadoPeriodo: n(money(vPer)),
+      }
+    })
+
+    const ggP = D(p.ggPorcentaje).mul(cdPeriodo)
+    const utP = D(p.utilidadPorcentaje).mul(cdPeriodo)
+    const subP = cdPeriodo.add(ggP).add(utP)
+    const igvP = D(p.igvPorcentaje).mul(subP)
+    const totalP = subP.add(igvP)
+
+    const ggA = D(p.ggPorcentaje).mul(cdAcum)
+    const utA = D(p.utilidadPorcentaje).mul(cdAcum)
+    const subA = cdAcum.add(ggA).add(utA)
+    const igvA = D(p.igvPorcentaje).mul(subA)
+    const totalA = subA.add(igvA)
+
+    const cdTotal = D(arbol.costoDirecto)
+    const avanceGlobal = cdTotal.gt(0) ? n(money(cdAcum.div(cdTotal).mul(100))) : 0
+
+    return {
+      valorizacion: { id: val.id, numero: val.numero, periodo: val.periodo, estado: val.estado },
+      presupuesto: { id: p.id, nombre: p.nombre, tipo: p.tipo, costoDirecto: arbol.costoDirecto, total: arbol.total },
+      items,
+      totales: {
+        cd_periodo: n(money(cdPeriodo)), gg_periodo: n(money(ggP)), ut_periodo: n(money(utP)), igv_periodo: n(money(igvP)), total_periodo: n(money(totalP)),
+        cd_acum: n(money(cdAcum)), total_acum: n(money(totalA)),
+        avance_global_pct: avanceGlobal,
+      },
+    }
   }
 }

@@ -58,6 +58,7 @@ import { FormulaPolinomica } from './entities/formula-polinomica.entity'
 import { IndiceUnificado } from './entities/indice-unificado.entity'
 import { AdicionalDeductivo } from './entities/adicional-deductivo.entity'
 import { AuditLog } from './entities/audit-log.entity'
+import { Valorizacion } from './entities/valorizacion.entity'
 import { AgentAuditLog } from './audit/agent-audit-log.entity'
 
 const entities = [
@@ -68,7 +69,7 @@ const entities = [
   FaseDetalle, RegistroFase, DocumentoRequerido, PartidaCatalogo,
   // Presupuestos y Costos
   Recurso, RecursoPrecio, Partida, ApuLineaEntity, Presupuesto, PresupuestoItem,
-  FormulaPolinomica, IndiceUnificado, AdicionalDeductivo, AuditLog,
+  FormulaPolinomica, IndiceUnificado, AdicionalDeductivo, AuditLog, Valorizacion,
   // Auditoría transversal de IA
   AgentAuditLog,
 ]
