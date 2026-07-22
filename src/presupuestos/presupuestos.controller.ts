@@ -89,6 +89,12 @@ export class PresupuestosController {
   @Post(':id/recalcular')
   recalcular(@Param('id') id: string, @CurrentUser() u: JwtUser) { return this.svc.refrescarSnapshots(id, u?.sub) }
 
+  /** Condiciones de cobro del contrato: % de adelanto amortizable + % de fondo de garantía. */
+  @Patch(':id/deducciones')
+  actualizarDeducciones(@Param('id') id: string, @Body() body: { adelantoPct?: number; fondoGarantiaPct?: number }, @CurrentUser() u: JwtUser) {
+    return this.svc.actualizarDeducciones(id, body, u?.sub)
+  }
+
   /** Duplicar Meta → Venta / Línea Base (respeta las reglas de edición por tipo). */
   @Post(':id/duplicar')
   duplicar(@Param('id') id: string, @Body('tipo') tipo: 'venta' | 'linea_base', @Body('nombre') nombre?: string) {
@@ -98,6 +104,12 @@ export class PresupuestosController {
   @Post(':id/items')
   crearItem(@Param('id') id: string, @Body() body: any, @CurrentUser() u: JwtUser) {
     return this.svc.crearItem(id, body, u?.sub)
+  }
+
+  /** Agrega una partida desde la biblioteca WBS (partidas_catalogo) con P.U. manual. */
+  @Post(':id/items-catalogo')
+  agregarDesdeCatalogo(@Param('id') id: string, @Body() body: any, @CurrentUser() u: JwtUser) {
+    return this.svc.agregarDesdeCatalogo(id, body, u?.sub)
   }
 
   // ── Valorizaciones (avance mensual para cobrar) ──

@@ -8,11 +8,12 @@ import { Presupuesto } from '../entities/presupuesto.entity'
 import { PresupuestoItem } from '../entities/presupuesto-item.entity'
 import { AuditLog } from '../entities/audit-log.entity'
 import { Valorizacion } from '../entities/valorizacion.entity'
+import { PartidaCatalogo } from '../entities/partida-catalogo.entity'
 import { PresupuestosService } from './presupuestos.service'
 import { PresupuestosController } from './presupuestos.controller'
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Recurso, RecursoPrecio, Partida, ApuLineaEntity, Presupuesto, PresupuestoItem, AuditLog, Valorizacion])],
+  imports: [TypeOrmModule.forFeature([Recurso, RecursoPrecio, Partida, ApuLineaEntity, Presupuesto, PresupuestoItem, AuditLog, Valorizacion, PartidaCatalogo])],
   controllers: [PresupuestosController],
   providers: [PresupuestosService],
   exports: [PresupuestosService], // Gerencia de Proyectos consumirá esto más adelante.

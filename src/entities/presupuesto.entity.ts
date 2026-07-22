@@ -41,6 +41,14 @@ export class Presupuesto {
   @Column({ name: 'igv_porcentaje', type: 'decimal', precision: 6, scale: 4, default: 0.18 })
   igvPorcentaje: string
 
+  /** % del contrato entregado como adelanto (se amortiza en cada valorización). Fracción (0.20 = 20%). */
+  @Column({ name: 'adelanto_pct', type: 'decimal', precision: 6, scale: 4, default: 0 })
+  adelantoPct: string
+
+  /** % retenido en cada valorización como fondo de garantía (se devuelve en la liquidación). Fracción. */
+  @Column({ name: 'fondo_garantia_pct', type: 'decimal', precision: 6, scale: 4, default: 0 })
+  fondoGarantiaPct: string
+
   @Column({ default: false })
   congelado: boolean
 

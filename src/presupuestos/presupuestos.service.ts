@@ -10,6 +10,7 @@ import { Presupuesto } from '../entities/presupuesto.entity'
 import { PresupuestoItem } from '../entities/presupuesto-item.entity'
 import { AuditLog } from '../entities/audit-log.entity'
 import { Valorizacion } from '../entities/valorizacion.entity'
+import { PartidaCatalogo } from '../entities/partida-catalogo.entity'
 import {
   calcularApu, calcularPresupuesto, CalcContext, ApuLinea, ItemDef, ApuResultado,
 } from './engine'
@@ -29,6 +30,7 @@ export class PresupuestosService implements OnModuleInit {
     @InjectRepository(PresupuestoItem) private items: Repository<PresupuestoItem>,
     @InjectRepository(AuditLog) private auditLog: Repository<AuditLog>,
     @InjectRepository(Valorizacion) private valorizaciones: Repository<Valorizacion>,
+    @InjectRepository(PartidaCatalogo) private catalogo: Repository<PartidaCatalogo>,
   ) {}
 
   async onModuleInit() {
@@ -157,6 +159,20 @@ export class PresupuestosService implements OnModuleInit {
   listarPresupuestos(proyectoId: string) { return this.presupuestos.find({ where: { proyectoId }, order: { createdAt: 'DESC' } }) }
   crearPresupuesto(dto: Partial<Presupuesto>) { return this.presupuestos.save(this.presupuestos.create(dto)) }
 
+  /**
+   * Condiciones de cobro del contrato: % de adelanto amortizable y % de fondo de garantía retenido.
+   * Se guardan como FRACCIÓN (0.20 = 20%). Se descuentan en cada valorización.
+   */
+  async actualizarDeducciones(id: string, dto: { adelantoPct?: number; fondoGarantiaPct?: number }, usuarioId?: string) {
+    const p = await this.cabecera(id)
+    const frac = (x: any) => String(Math.min(1, Math.max(0, Number(x) || 0)))
+    if (dto?.adelantoPct != null) p.adelantoPct = frac(dto.adelantoPct)
+    if (dto?.fondoGarantiaPct != null) p.fondoGarantiaPct = frac(dto.fondoGarantiaPct)
+    await this.presupuestos.save(p)
+    await this.audit('presupuesto', id, 'deducciones', null, `adelanto ${p.adelantoPct} · garantía ${p.fondoGarantiaPct}`, usuarioId)
+    return p
+  }
+
   private async cabecera(id: string) {
     const p = await this.presupuestos.findOne({ where: { id } })
     if (!p) throw new NotFoundException('Presupuesto no encontrado')
@@ -192,6 +208,9 @@ export class PresupuestosService implements OnModuleInit {
     const ctx = await this.buildContext()
     for (const it of rows) {
       if (it.tipo !== 'partida' || !it.partidaId) continue
+      // Sin APU armado (p.ej. partida traída del catálogo con P.U. manual) → conserva su snapshot, no lo pongas en 0.
+      const def = ctx.partida(it.partidaId)
+      if (!def || def.apu.length === 0) continue
       const apu = calcularApu(it.partidaId, ctx)
       it.costoUnitarioSnapshot = apu.costoUnitario.toFixed(2)
       it.porGenericoSnapshot = { MO: apu.porGenerico.MO.toNumber(), MAT: apu.porGenerico.MAT.toNumber(), EQP: apu.porGenerico.EQP.toNumber(), SUB: apu.porGenerico.SUB.toNumber() }
@@ -252,6 +271,42 @@ export class PresupuestosService implements OnModuleInit {
     const saved = await this.items.save(it)
     await this.audit('presupuesto_item', saved.id, 'crear', null, saved.descripcion, usuarioId)
     return saved
+  }
+
+  /**
+   * Agrega una partida DESDE LA BIBLIOTECA WBS (partidas_catalogo, 8k partidas) al presupuesto.
+   * El catálogo WBS es pura taxonomía (sin precio), así que: (1) crea —o reusa— una partida en
+   * pre_partidas (código/descr/unidad, reutilizable, con APU editable después) y (2) mete el item al
+   * árbol con el P.U. que el usuario tipeó como snapshot manual. Si no pone precio, queda en 0 hasta
+   * armarle el APU. El recálculo respeta ese P.U. manual mientras la partida no tenga APU.
+   */
+  async agregarDesdeCatalogo(
+    presupuestoId: string,
+    dto: { catalogoId: string; parentId?: string | null; metrado?: number; precioUnitario?: number },
+    usuarioId?: string,
+  ) {
+    const pres = await this.assertEditable(presupuestoId)
+    const cat = await this.catalogo.findOne({ where: { id: dto?.catalogoId } })
+    if (!cat) throw new NotFoundException('Partida de catálogo no encontrada')
+
+    // Reusar la partida del proyecto si ya existe por código; si no, crearla.
+    let partida = await this.partidas.findOne({ where: { proyectoId: pres.proyectoId, codigo: cat.codigo } })
+    if (!partida) {
+      partida = await this.partidas.save(this.partidas.create({
+        codigo: cat.codigo, descripcion: cat.partida, unidad: cat.unidad,
+        especialidad: cat.especialidad || '', esSubpartida: false, proyectoId: pres.proyectoId,
+      }))
+    }
+
+    const pu = dto?.precioUnitario != null && !isNaN(Number(dto.precioUnitario)) ? Number(dto.precioUnitario) : null
+    const saved = await this.items.save(this.items.create({
+      presupuestoId, parentId: dto?.parentId || null, tipo: 'partida', partidaId: partida.id,
+      codigo: cat.codigo, descripcion: cat.partida,
+      metrado: dto?.metrado != null ? String(Number(dto.metrado)) : null,
+      costoUnitarioSnapshot: pu != null ? pu.toFixed(2) : null,
+    }))
+    await this.audit('presupuesto_item', saved.id, 'crear_catalogo', null, `${cat.codigo} · ${cat.partida}`, usuarioId)
+    return this.calcularArbol(presupuestoId)
   }
 
   /** Edita un item (metrado, descripción…). Audita el cambio de metrado. */
@@ -611,6 +666,15 @@ export class PresupuestosService implements OnModuleInit {
     const cdTotal = D(arbol.costoDirecto)
     const avanceGlobal = cdTotal.gt(0) ? n(money(cdAcum.div(cdTotal).mul(100))) : 0
 
+    // Deducciones del contrato: amortización del adelanto + fondo de garantía → NETO a cobrar.
+    // Ambas se aplican sobre el monto bruto de la valorización (con IGV). Fracción en la cabecera.
+    const adelantoPct = D(p.adelantoPct ?? 0)
+    const garantiaPct = D(p.fondoGarantiaPct ?? 0)
+    const amortP = adelantoPct.mul(totalP), retP = garantiaPct.mul(totalP)
+    const netoP = totalP.sub(amortP).sub(retP)
+    const amortA = adelantoPct.mul(totalA), retA = garantiaPct.mul(totalA)
+    const netoA = totalA.sub(amortA).sub(retA)
+
     return {
       valorizacion: { id: val.id, numero: val.numero, periodo: val.periodo, estado: val.estado },
       presupuesto: { id: p.id, nombre: p.nombre, tipo: p.tipo, costoDirecto: arbol.costoDirecto, total: arbol.total },
@@ -619,6 +683,10 @@ export class PresupuestosService implements OnModuleInit {
         cd_periodo: n(money(cdPeriodo)), gg_periodo: n(money(ggP)), ut_periodo: n(money(utP)), igv_periodo: n(money(igvP)), total_periodo: n(money(totalP)),
         cd_acum: n(money(cdAcum)), total_acum: n(money(totalA)),
         avance_global_pct: avanceGlobal,
+        // Deducciones y neto (período + acumulado)
+        adelanto_pct: Number(p.adelantoPct ?? 0), fondo_garantia_pct: Number(p.fondoGarantiaPct ?? 0),
+        amort_periodo: n(money(amortP)), retencion_periodo: n(money(retP)), neto_periodo: n(money(netoP)),
+        amort_acum: n(money(amortA)), retencion_acum: n(money(retA)), neto_acum: n(money(netoA)),
       },
     }
   }
