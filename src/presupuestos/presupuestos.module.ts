@@ -11,9 +11,10 @@ import { Valorizacion } from '../entities/valorizacion.entity'
 import { PartidaCatalogo } from '../entities/partida-catalogo.entity'
 import { PresupuestosService } from './presupuestos.service'
 import { PresupuestosController } from './presupuestos.controller'
+import { MotoresModule } from '../motores/motores.module'
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Recurso, RecursoPrecio, Partida, ApuLineaEntity, Presupuesto, PresupuestoItem, AuditLog, Valorizacion, PartidaCatalogo])],
+  imports: [TypeOrmModule.forFeature([Recurso, RecursoPrecio, Partida, ApuLineaEntity, Presupuesto, PresupuestoItem, AuditLog, Valorizacion, PartidaCatalogo]), MotoresModule],
   controllers: [PresupuestosController],
   providers: [PresupuestosService],
   exports: [PresupuestosService], // Gerencia de Proyectos consumirá esto más adelante.

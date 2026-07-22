@@ -65,6 +65,18 @@ export class PresupuestosController {
     return this.svc.confirmarImport(body, u?.sub)
   }
 
+  /** Plano → presupuesto (paso 1): mide un DXF y devuelve las capas con área m² + partida sugerida. */
+  @Post('metrado-dxf')
+  metradoDxf(@Body('dxfBase64') dxfBase64: string) {
+    return this.svc.previewMetradoDxf(dxfBase64)
+  }
+
+  /** Crea un presupuesto ESTIMADO desde una lista de partidas (flujo DXF y estimado IA vía REST). */
+  @Post('estimado')
+  crearEstimado(@Body() body: any, @CurrentUser() u: JwtUser) {
+    return this.svc.crearEstimadoIa(body, u?.sub)
+  }
+
   // ── Presupuestos ──
   @Get()
   listar(@Query('proyectoId') proyectoId: string) { return this.svc.listarPresupuestos(proyectoId) }

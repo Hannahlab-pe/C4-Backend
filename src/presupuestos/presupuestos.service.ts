@@ -17,6 +17,7 @@ import {
 import { D, money, n, Decimal } from './engine/precision'
 import { parseExcelPresupuesto } from './import/import-excel'
 import { matchPartida, CatalogoItem } from './import/matching'
+import { MotoresService } from '../motores/motores.service'
 
 /** Servicio del módulo Presupuestos y Costos. Toda la lógica de negocio usa el motor puro. */
 @Injectable()
@@ -31,7 +32,14 @@ export class PresupuestosService implements OnModuleInit {
     @InjectRepository(AuditLog) private auditLog: Repository<AuditLog>,
     @InjectRepository(Valorizacion) private valorizaciones: Repository<Valorizacion>,
     @InjectRepository(PartidaCatalogo) private catalogo: Repository<PartidaCatalogo>,
+    private motores: MotoresService,
   ) {}
+
+  /** Mide un DXF (áreas por capa + partida sugerida) para el flujo "subir plano → presupuesto". */
+  async previewMetradoDxf(dxfBase64: string) {
+    if (!dxfBase64) throw new BadRequestException('Falta el DXF.')
+    return this.motores.metradoDxf(dxfBase64)
+  }
 
   async onModuleInit() {
     try { await this.seedBetondecken() } catch { /* no romper el arranque si falla el seed */ }

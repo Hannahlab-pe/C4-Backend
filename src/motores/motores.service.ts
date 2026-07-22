@@ -64,6 +64,13 @@ export class MotoresService {
     return data
   }
 
+  /** Mide áreas por capa de un DXF (para armar metrado): devuelve capas + área m² + partida sugerida. */
+  async metradoDxf(dxfBase64: string): Promise<any> {
+    const { data } = await axios.post(`${this.baseUrl}/metrado-dxf`, { dxf_base64: dxfBase64 },
+      { timeout: 60_000, maxBodyLength: Infinity, maxContentLength: Infinity })
+    return data
+  }
+
   async ubicarGrua(payload: {
     dxf_base64: string; modelo?: string; radio_m?: number; base_m?: number
     frente_m?: number; fondo_m?: number; esquina?: string
